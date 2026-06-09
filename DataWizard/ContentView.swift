@@ -8,10 +8,11 @@ struct ContentView: View {
     @State private var plans: [FilePlan] = []
     @State private var stage: Stage = .files
 
-    // Value unification (across the merged columns)
+    // Column-centric review of the final output
+    @State private var finalColumns: [UnifiedColumn] = []
+    @State private var reviews: [ColumnReview] = []
     @State private var valueMap: [UnifiedColumn: [String: String]] = [:]
-    @State private var unifyColumns: [UnifiedColumn] = []
-    @State private var columnValues: [UnifiedColumn: [DistinctValue]] = [:]
+    @State private var checked: Set<UnifiedColumn> = []
 
     @State private var result: MergeResult?
     @State private var errorMessage: String?
@@ -42,7 +43,7 @@ struct ContentView: View {
                         .foregroundStyle(Color.accentColor)
                     Text("데이터 마법사")
                         .font(.system(size: 28, weight: .bold, design: .rounded))
-                    Text("흩어진 지원 파일들을 추가하면, 어떤 필드와 값이 어떻게 합쳐지는지 검토한 뒤 하나의 명단으로 만듭니다.")
+                    Text("흩어진 지원 파일들을 추가하면, 완성될 컬럼과 그 안의 값을 하나씩 확인한 뒤 하나의 명단으로 만듭니다.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -69,7 +70,7 @@ struct ContentView: View {
                 Button(action: prepareReview) {
                     HStack {
                         if isPreparing { ProgressView().controlSize(.small) }
-                        Text(isPreparing ? "불러오는 중…" : "검토 & 매핑 →").fontWeight(.semibold)
+                        Text(isPreparing ? "불러오는 중…" : "컬럼 검토 →").fontWeight(.semibold)
                     }
                     .frame(maxWidth: .infinity)
                 }
@@ -86,40 +87,24 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Stage 2: review mapping + value unification (full width)
+    // MARK: - Stage 2: column-by-column review with checkboxes
+
+    private var allChecked: Bool {
+        !finalColumns.isEmpty && finalColumns.allSatisfy { checked.contains($0) }
+    }
 
     private var reviewStage: some View {
         VStack(spacing: 0) {
             reviewToolbar
             Divider()
             ScrollView {
-                VStack(alignment: .leading, spacing: 28) {
-                    VStack(alignment: .leading, spacing: 16) {
-                        sectionHeader("① 필드 매핑",
-                                      "각 파일의 원본 컬럼이 어떤 통합 필드로 들어갈지 확인·수정하세요.")
-                        ForEach($plans) { $plan in
-                            PlanReviewCard(plan: $plan)
-                        }
-                    }
-
-                    if !unifyColumns.isEmpty {
-                        VStack(alignment: .leading, spacing: 16) {
-                            HStack(alignment: .firstTextBaseline) {
-                                sectionHeader("② 값 통일",
-                                              "한 컬럼으로 합쳐질 때 같은 뜻의 값을 하나로 모으세요. 예: ‘Seoul’과 ‘서울’.")
-                                Spacer()
-                                Button { rescanValues() } label: {
-                                    Label("값 다시 스캔", systemImage: "arrow.clockwise")
-                                }
-                                .controlSize(.small)
-                                .help("필드 매핑을 바꿨다면 눌러 값 목록을 새로고침하세요.")
-                            }
-                            ForEach(unifyColumns, id: \.self) { col in
-                                ValueUnifyCard(column: col,
-                                               values: columnValues[col] ?? [],
-                                               mapping: bindingForColumn(col),
-                                               onAuto: { autoUnify(col) })
-                            }
+                VStack(alignment: .leading, spacing: 16) {
+                    progressHeader
+                    ForEach(reviews) { review in
+                        ReviewSection(title: review.column.rawValue,
+                                      subtitle: subtitle(for: review),
+                                      isChecked: checkBinding(review.column)) {
+                            body(for: review)
                         }
                     }
                 }
@@ -128,17 +113,34 @@ struct ContentView: View {
         }
     }
 
+    private var progressHeader: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("컬럼별 검토")
+                    .font(.title3.weight(.bold))
+                Text("각 컬럼의 값을 확인하고 ‘이대로 OK’를 체크하세요. 모두 체크하면 합칠 수 있어요.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+            Spacer()
+            VStack(alignment: .trailing, spacing: 6) {
+                Text("\(checked.count) / \(finalColumns.count) 완료")
+                    .font(.headline).monospacedDigit()
+                Button(allChecked ? "모두 해제" : "모두 이대로 OK") { toggleAll() }
+                    .controlSize(.small)
+            }
+        }
+        .padding(.bottom, 4)
+    }
+
     private var reviewToolbar: some View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("검토").font(.title2.weight(.bold))
-                Text("\(plans.count)개 파일 · 매핑과 값을 확인한 뒤 합치세요")
+                Text("\(finalColumns.count)개 컬럼 · 완성될 결과를 확인하세요")
                     .font(.callout).foregroundStyle(.secondary)
             }
             Spacer()
-            if let errorMessage {
-                errorLabel(errorMessage).frame(maxWidth: 320)
-            }
+            if let errorMessage { errorLabel(errorMessage).frame(maxWidth: 300) }
             Button("← 파일") { stage = .files }
             Button(action: runMerge) {
                 HStack {
@@ -148,9 +150,47 @@ struct ContentView: View {
             }
             .controlSize(.large)
             .buttonStyle(.borderedProminent)
-            .disabled(isRunning)
+            .disabled(!allChecked || isRunning)
+            .help(allChecked ? "병합을 시작합니다" : "모든 컬럼을 검토(체크)해야 합칠 수 있어요.")
         }
         .padding(20)
+    }
+
+    // MARK: - Per-column review body
+
+    @ViewBuilder
+    private func body(for review: ColumnReview) -> some View {
+        switch review.kind {
+        case .category:
+            ValueUnifyBody(values: review.values,
+                           mapping: bindingForColumn(review.column),
+                           onAuto: { autoUnify(review.column, values: review.values) })
+        case .phone, .date:
+            ExamplesBody(note: review.note, examples: review.examples)
+        case .freeText:
+            SamplesBody(note: review.note, samples: review.samples, distinctCount: review.distinctCount)
+        case .derived:
+            NoteBody(note: review.note)
+        }
+    }
+
+    private func subtitle(for review: ColumnReview) -> String {
+        switch review.kind {
+        case .category:
+            return "값 통일 · \(review.distinctCount)종 값 · \(review.total)행"
+        case .phone:
+            return review.flaggedCount > 0
+                ? "전화번호 정규화 · 표준(010-) 아님 \(review.flaggedCount)종"
+                : "전화번호 정규화 · 모두 표준 형식"
+        case .date:
+            return review.flaggedCount > 0
+                ? "생년월일 정규화 · 인식 못함 \(review.flaggedCount)종"
+                : "생년월일 정규화 · 모두 인식됨"
+        case .freeText:
+            return "자유 입력 · \(review.distinctCount)종 값 · \(review.total)행"
+        case .derived:
+            return "자동 생성 컬럼"
+        }
     }
 
     // MARK: - Stage 3: result (full width)
@@ -260,16 +300,6 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Small shared views
-
-    private func sectionHeader(_ title: String, _ subtitle: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title).font(.title3.weight(.bold))
-            Text(subtitle).font(.callout).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
     private func errorLabel(_ message: String) -> some View {
         Label(message, systemImage: "exclamationmark.triangle.fill")
             .font(.callout).foregroundStyle(.red)
@@ -293,15 +323,24 @@ struct ContentView: View {
         inputs.removeAll { $0.id == input.id }
     }
 
+    private func checkBinding(_ col: UnifiedColumn) -> Binding<Bool> {
+        Binding(get: { checked.contains(col) },
+                set: { if $0 { checked.insert(col) } else { checked.remove(col) } })
+    }
+
+    private func toggleAll() {
+        checked = allChecked ? [] : Set(finalColumns)
+    }
+
     private func bindingForColumn(_ col: UnifiedColumn) -> Binding<[String: String]> {
         Binding(get: { valueMap[col] ?? [:] }, set: { valueMap[col] = $0 })
     }
 
-    private func autoUnify(_ col: UnifiedColumn) {
-        valueMap[col] = ValueCanonicalizer.suggest(columnValues[col] ?? [])
+    private func autoUnify(_ col: UnifiedColumn, values: [DistinctValue]) {
+        valueMap[col] = ValueCanonicalizer.suggest(values)
     }
 
-    /// Parse every added file into an editable plan, scan categorical values, then review.
+    /// Parse every added file, then build the column-by-column review.
     private func prepareReview() {
         errorMessage = nil
         isPreparing = true
@@ -320,34 +359,25 @@ struct ContentView: View {
                     break
                 }
             }
-            let cols = failure == nil ? ValueScanner.candidates(in: built) : []
-            var values: [UnifiedColumn: [DistinctValue]] = [:]
-            for c in cols { values[c] = ValueScanner.distinct(c, in: built) }
+            let cols = failure == nil ? ColumnReviewBuilder.finalColumns(in: built) : []
+            let revs = failure == nil ? ColumnReviewBuilder.reviews(in: built) : []
             DispatchQueue.main.async {
                 self.isPreparing = false
                 if let failure { self.errorMessage = failure; return }
                 self.plans = built
-                self.applyScan(cols: cols, values: values)
+                self.finalColumns = cols
+                self.reviews = revs
+                self.checked = []
+                self.seedValueMap(from: revs)
                 self.stage = .review
             }
         }
     }
 
-    /// Re-scan distinct values after the user changes field mappings.
-    private func rescanValues() {
-        let cols = ValueScanner.candidates(in: plans)
-        var values: [UnifiedColumn: [DistinctValue]] = [:]
-        for c in cols { values[c] = ValueScanner.distinct(c, in: plans) }
-        applyScan(cols: cols, values: values)
-    }
-
-    private func applyScan(cols: [UnifiedColumn], values: [UnifiedColumn: [DistinctValue]]) {
-        unifyColumns = cols
-        columnValues = values
-        // Seed identity so each value defaults to itself until the user unifies it.
-        for c in cols {
-            for dv in values[c] ?? [] where valueMap[c]?[dv.value] == nil {
-                valueMap[c, default: [:]][dv.value] = dv.value
+    private func seedValueMap(from reviews: [ColumnReview]) {
+        for review in reviews where review.kind == .category {
+            for dv in review.values where valueMap[review.column]?[dv.value] == nil {
+                valueMap[review.column, default: [:]][dv.value] = dv.value
             }
         }
     }
@@ -437,152 +467,56 @@ struct InputFileRow: View {
     }
 }
 
-/// Review card for one file: header, detected issues, and an editable
-/// field-mapping table with live sample values.
-struct PlanReviewCard: View {
-    @Binding var plan: FilePlan
+/// A reviewable column section: a header with an "이대로 OK" checkbox over its body.
+/// Tints green once checked.
+struct ReviewSection<Content: View>: View {
+    let title: String
+    let subtitle: String
+    @Binding var isChecked: Bool
+    @ViewBuilder var content: () -> Content
 
     var body: some View {
-        let issues = PlanAnalyzer.issues(for: plan)
-        VStack(alignment: .leading, spacing: 14) {
-            header
-
-            if !issues.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(issues) { issue in
-                        Label(issue.message, systemImage: issue.icon)
-                            .font(.caption)
-                            .foregroundStyle(color(for: issue.severity))
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.headline)
+                        .lineLimit(1).truncationMode(.tail).help(title)
+                    Text(subtitle)
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color(nsColor: .underPageBackgroundColor))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                Spacer(minLength: 12)
+                Toggle(isOn: $isChecked) { Text("이대로 OK") }
+                    .toggleStyle(.checkbox)
+                    .font(.callout)
+                    .fixedSize()
             }
-
-            VStack(spacing: 6) {
-                MappingHeaderRow()
-                if plan.channel == .simple {
-                    MappingRow(label: "성 (姓)",
-                               selection: $plan.surnameColumn,
-                               headers: plan.headers,
-                               sample: plan.sample(of: plan.surnameColumn))
-                }
-                ForEach(FilePlan.coreFields, id: \.self) { field in
-                    mappingRow(for: field)
-                }
-            }
-
-            if !plan.extraMappedFields.isEmpty {
-                DisclosureGroup("그 외 매핑된 필드 \(plan.extraMappedFields.count)개") {
-                    VStack(spacing: 6) {
-                        ForEach(plan.extraMappedFields, id: \.self) { field in
-                            mappingRow(for: field)
-                        }
-                    }
-                    .padding(.top, 6)
-                }
-                .font(.callout)
-            }
+            content()
         }
         .padding(16)
-        .background(Color(nsColor: .controlBackgroundColor))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(isChecked ? Color.green.opacity(0.07) : Color(nsColor: .controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 12))
-    }
-
-    private var header: some View {
-        HStack {
-            Image(systemName: "doc.fill").foregroundStyle(Color.accentColor)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(plan.fileName).font(.headline)
-                Text("\(plan.channel.rawValue) · \(plan.rows.count)행 · 원본 컬럼 \(plan.headers.count)개")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            Spacer()
-        }
-    }
-
-    private func mappingRow(for field: UnifiedColumn) -> some View {
-        MappingRow(
-            label: field.rawValue,
-            selection: Binding(
-                get: { plan.mapping[field] ?? "" },
-                set: { plan.mapping[field] = $0 }
-            ),
-            headers: plan.headers,
-            sample: plan.sample(of: plan.mapping[field] ?? "")
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(isChecked ? Color.green.opacity(0.45) : Color.clear, lineWidth: 1)
         )
     }
-
-    private func color(for severity: MappingIssue.Severity) -> Color {
-        switch severity {
-        case .error:   return .red
-        case .warning: return .orange
-        case .info:    return .secondary
-        }
-    }
 }
 
-private struct MappingHeaderRow: View {
-    var body: some View {
-        HStack(spacing: 10) {
-            Text("통합 필드").frame(width: 150, alignment: .leading)
-            Text("원본 컬럼").frame(width: 220, alignment: .leading)
-            Text("예시 값").frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .font(.caption.weight(.semibold))
-        .foregroundStyle(.secondary)
-    }
-}
-
-/// A single editable mapping line: unified field ← source column, with a sample.
-struct MappingRow: View {
-    let label: String
-    @Binding var selection: String
-    let headers: [String]
-    let sample: String
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Text(label)
-                .font(.callout)
-                .frame(width: 150, alignment: .leading)
-                .lineLimit(1).truncationMode(.tail)
-                .help(label)
-            Picker("", selection: $selection) {
-                Text("— 없음 —").tag("")
-                ForEach(headers, id: \.self) { h in Text(h).tag(h) }
-            }
-            .labelsHidden()
-            .frame(width: 220)
-            Text(sample.isEmpty ? "—" : sample)
-                .font(.caption).foregroundStyle(.secondary)
-                .lineLimit(1).truncationMode(.tail)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .help(sample)
-        }
-    }
-}
-
-/// Card to collapse value variants in one merged column onto a canonical form.
-struct ValueUnifyCard: View {
-    let column: UnifiedColumn
+/// Body for a categorical column: edit how value variants collapse onto one value.
+struct ValueUnifyBody: View {
     let values: [DistinctValue]
     @Binding var mapping: [String: String]
     let onAuto: () -> Void
 
     var body: some View {
         let groupCount = Set(values.map { mapping[$0.value] ?? $0.value }).count
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(column.rawValue)
-                        .font(.headline).lineLimit(1).truncationMode(.tail).help(column.rawValue)
-                    Text("\(values.count)개 값 → \(groupCount)개로 통일")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
+                Text("\(values.count)개 값 → \(groupCount)개로 통일")
+                    .font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button(action: onAuto) {
                     Label("자동 통일", systemImage: "wand.and.stars")
@@ -591,42 +525,121 @@ struct ValueUnifyCard: View {
                 .help("같은 뜻으로 보이는 값을 자동으로 한 값에 모읍니다.")
             }
 
-            VStack(spacing: 6) {
+            HStack(spacing: 10) {
+                Text("원본 값").frame(width: 220, alignment: .leading)
+                Text("건수").frame(width: 48, alignment: .trailing)
+                Text("통일 값").frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+
+            ForEach(values) { dv in
+                let canonical = mapping[dv.value] ?? dv.value
+                let changed = canonical != dv.value
                 HStack(spacing: 10) {
-                    Text("원본 값").frame(width: 220, alignment: .leading)
-                    Text("건수").frame(width: 48, alignment: .trailing)
-                    Text("통일 값").frame(maxWidth: .infinity, alignment: .leading)
+                    Text(dv.value)
+                        .font(.callout)
+                        .frame(width: 220, alignment: .leading)
+                        .lineLimit(1).truncationMode(.tail).help(dv.value)
+                    Text("\(dv.count)")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .frame(width: 48, alignment: .trailing)
+                    HStack(spacing: 6) {
+                        Image(systemName: changed ? "arrow.right" : "equal")
+                            .font(.caption2)
+                            .foregroundStyle(changed ? Color.accentColor : Color.secondary)
+                        TextField("", text: Binding(
+                            get: { mapping[dv.value] ?? dv.value },
+                            set: { mapping[dv.value] = $0 }
+                        ))
+                        .textFieldStyle(.roundedBorder)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+    }
+}
+
+/// Body for an auto-normalized column (phone/date): explanation + original → cleaned.
+struct ExamplesBody: View {
+    let note: String
+    let examples: [ColumnExample]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if !note.isEmpty {
+                Text(note).font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if !examples.isEmpty {
+                HStack(spacing: 10) {
+                    Text("원본 값").frame(width: 240, alignment: .leading)
+                    Text("자동 변환 →").frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
 
-                ForEach(values) { dv in
-                    let canonical = mapping[dv.value] ?? dv.value
-                    let changed = canonical != dv.value
+                ForEach(examples) { ex in
                     HStack(spacing: 10) {
-                        Text(dv.value)
+                        Text(ex.original)
                             .font(.callout)
-                            .frame(width: 220, alignment: .leading)
-                            .lineLimit(1).truncationMode(.tail).help(dv.value)
-                        Text("\(dv.count)")
-                            .font(.caption).foregroundStyle(.secondary)
-                            .frame(width: 48, alignment: .trailing)
+                            .frame(width: 240, alignment: .leading)
+                            .lineLimit(1).truncationMode(.tail).help(ex.original)
                         HStack(spacing: 6) {
-                            Image(systemName: changed ? "arrow.right" : "equal")
-                                .font(.caption2)
-                                .foregroundStyle(changed ? Color.accentColor : Color.secondary)
-                            TextField("", text: Binding(
-                                get: { mapping[dv.value] ?? dv.value },
-                                set: { mapping[dv.value] = $0 }
-                            ))
-                            .textFieldStyle(.roundedBorder)
+                            Image(systemName: "arrow.right")
+                                .font(.caption2).foregroundStyle(Color.secondary)
+                            Text(ex.cleaned.isEmpty ? "—" : ex.cleaned)
+                                .font(.callout)
+                                .foregroundStyle(ex.flagged ? Color.orange : Color.primary)
+                            if ex.flagged {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .font(.caption2).foregroundStyle(.orange)
+                            }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
             }
         }
-        .padding(16)
-        .background(Color(nsColor: .controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+/// Body for a free-text column: a note plus a few sample values.
+struct SamplesBody: View {
+    let note: String
+    let samples: [String]
+    let distinctCount: Int
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if !note.isEmpty {
+                Text(note).font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if !samples.isEmpty {
+                Text("예시 값")
+                    .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                ForEach(Array(samples.enumerated()), id: \.offset) { _, value in
+                    Text("• \(value)")
+                        .font(.callout)
+                        .lineLimit(1).truncationMode(.tail).help(value)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if distinctCount > samples.count {
+                    Text("외 \(distinctCount - samples.count)종")
+                        .font(.caption).foregroundStyle(.tertiary)
+                }
+            }
+        }
+    }
+}
+
+/// Body for a derived column: just the explanation.
+struct NoteBody: View {
+    let note: String
+    var body: some View {
+        Text(note)
+            .font(.caption).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
