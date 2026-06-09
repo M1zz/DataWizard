@@ -1,0 +1,188 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		92A664762C434730BD7C104A /* DataWizardApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F84542F23E243098FD78109 /* DataWizardApp.swift */; };
+		CF4525319D934257BDE9719E /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F110F7EC8D74A1F897562AA /* ContentView.swift */; };
+		36025ADA75624361A75D8F6D /* UnifiedSchema.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35C8C404EC5849998AD13C8A /* UnifiedSchema.swift */; };
+		7232F9E390384EEC9C8ACF13 /* Normalizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F08FDE4E3E144E78DFCAD68 /* Normalizer.swift */; };
+		6019FD942A924B62BA4B516D /* CSVParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE23835E68CD40DA9DB9E662 /* CSVParser.swift */; };
+		EC4812D4B5FE4468A1E8D323 /* XLSXReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0966D4FE8EBE41DA98975755 /* XLSXReader.swift */; };
+		E4FAD96902F24453B895C3AF /* MiniZip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A5B56BBF5BE40108349AF97 /* MiniZip.swift */; };
+		C4E2536A09614D11BB25C99E /* ChannelMapping.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB03AFDE7A3340DFB55E603E /* ChannelMapping.swift */; };
+		B473F3918AB34963AD9C8D3E /* MergeEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDD5B92BB60B4D9CAA107CF5 /* MergeEngine.swift */; };
+		DBEFAC7536AC42EBB999CC63 /* Exporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20B66DDED174964B22050A6 /* Exporter.swift */; };
+		AA01BB02CC03DD04EE05FF06 /* MappingPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD44EE55FF66 /* MappingPlan.swift */; };
+		BB01CC02DD03EE04FF050601 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = BB11CC22DD33EE44FF556601 /* Assets.xcassets */; };
+		CC01DD02EE03FF0405060701 /* ValueUnify.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC11DD22EE33FF4455660701 /* ValueUnify.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		0F84542F23E243098FD78109 /* DataWizardApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DataWizardApp.swift"; sourceTree = "<group>"; };
+		1F110F7EC8D74A1F897562AA /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ContentView.swift"; sourceTree = "<group>"; };
+		35C8C404EC5849998AD13C8A /* UnifiedSchema.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "UnifiedSchema.swift"; sourceTree = "<group>"; };
+		9F08FDE4E3E144E78DFCAD68 /* Normalizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Normalizer.swift"; sourceTree = "<group>"; };
+		AE23835E68CD40DA9DB9E662 /* CSVParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CSVParser.swift"; sourceTree = "<group>"; };
+		0966D4FE8EBE41DA98975755 /* XLSXReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "XLSXReader.swift"; sourceTree = "<group>"; };
+		8A5B56BBF5BE40108349AF97 /* MiniZip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MiniZip.swift"; sourceTree = "<group>"; };
+		FB03AFDE7A3340DFB55E603E /* ChannelMapping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChannelMapping.swift"; sourceTree = "<group>"; };
+		BDD5B92BB60B4D9CAA107CF5 /* MergeEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MergeEngine.swift"; sourceTree = "<group>"; };
+		F20B66DDED174964B22050A6 /* Exporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Exporter.swift"; sourceTree = "<group>"; };
+		AA11BB22CC33DD44EE55FF66 /* MappingPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MappingPlan.swift"; sourceTree = "<group>"; };
+		BB11CC22DD33EE44FF556601 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Assets.xcassets"; sourceTree = "<group>"; };
+		CC11DD22EE33FF4455660701 /* ValueUnify.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ValueUnify.swift"; sourceTree = "<group>"; };
+		3495D0341DEC44498FDFCD7B /* DataWizard.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = DataWizard.entitlements; sourceTree = "<group>"; };
+		E4428854A1234806B9AD3FEC /* 데이터 마법사.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "데이터 마법사.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		27D2EA65DF3C48609043C5D6 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		3E87AABD6AE24F0089D2D989 = {isa = PBXGroup; children = (
+			B2B744C02C4C4BA990B7A98C /* DataWizard */,
+			807774543AD848A898DB8DDE /* Products */,
+		); sourceTree = "<group>"; };
+		807774543AD848A898DB8DDE /* Products */ = {isa = PBXGroup; children = (
+			E4428854A1234806B9AD3FEC /* 데이터 마법사.app */,
+		); name = Products; sourceTree = "<group>"; };
+		B2B744C02C4C4BA990B7A98C /* DataWizard */ = {isa = PBXGroup; children = (
+			0F84542F23E243098FD78109 /* DataWizardApp.swift */,
+			1F110F7EC8D74A1F897562AA /* ContentView.swift */,
+			35C8C404EC5849998AD13C8A /* UnifiedSchema.swift */,
+			9F08FDE4E3E144E78DFCAD68 /* Normalizer.swift */,
+			AE23835E68CD40DA9DB9E662 /* CSVParser.swift */,
+			0966D4FE8EBE41DA98975755 /* XLSXReader.swift */,
+			8A5B56BBF5BE40108349AF97 /* MiniZip.swift */,
+			FB03AFDE7A3340DFB55E603E /* ChannelMapping.swift */,
+			BDD5B92BB60B4D9CAA107CF5 /* MergeEngine.swift */,
+			F20B66DDED174964B22050A6 /* Exporter.swift */,
+			AA11BB22CC33DD44EE55FF66 /* MappingPlan.swift */,
+			BB11CC22DD33EE44FF556601 /* Assets.xcassets */,
+			CC11DD22EE33FF4455660701 /* ValueUnify.swift */,
+			3495D0341DEC44498FDFCD7B /* DataWizard.entitlements */,
+		); path = DataWizard; sourceTree = "<group>"; };
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		C854B9630E3A4D23AAE142B3 /* DataWizard */ = {isa = PBXNativeTarget; buildConfigurationList = C8718B5F69AA477CBAD2882C /* Build configuration list for PBXNativeTarget "DataWizard" */; buildPhases = (
+			C6D9C653AE3D46BEA5DCC915 /* Sources */,
+			27D2EA65DF3C48609043C5D6 /* Frameworks */,
+			5B89D4A264234F1DA7EED5E5 /* Resources */,
+		); buildRules = (); dependencies = (); name = DataWizard; productName = DataWizard; productReference = E4428854A1234806B9AD3FEC /* 데이터 마법사.app */; productType = "com.apple.product-type.application"; };
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		262844CA665A44339F63AFA7 /* Project object */ = {isa = PBXProject; attributes = { BuildIndependentTargetsInParallel = 1; LastSwiftUpdateCheck = 1530; LastUpgradeCheck = 1530; TargetAttributes = { C854B9630E3A4D23AAE142B3 = { CreatedOnToolsVersion = 15.3; }; }; }; buildConfigurationList = D1F3B215AE0D4BC9A28E78B8 /* Build configuration list for PBXProject "DataWizard" */; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = ( en, Base, ko, ); mainGroup = 3E87AABD6AE24F0089D2D989; productRefGroup = 807774543AD848A898DB8DDE /* Products */; projectDirPath = ""; projectRoot = ""; targets = (
+			C854B9630E3A4D23AAE142B3 /* DataWizard */,
+		); };
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		5B89D4A264234F1DA7EED5E5 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (
+				BB01CC02DD03EE04FF050601 /* Assets.xcassets in Resources */,
+			); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		C6D9C653AE3D46BEA5DCC915 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (
+				92A664762C434730BD7C104A /* DataWizardApp.swift in Sources */,
+				CF4525319D934257BDE9719E /* ContentView.swift in Sources */,
+				36025ADA75624361A75D8F6D /* UnifiedSchema.swift in Sources */,
+				7232F9E390384EEC9C8ACF13 /* Normalizer.swift in Sources */,
+				6019FD942A924B62BA4B516D /* CSVParser.swift in Sources */,
+				EC4812D4B5FE4468A1E8D323 /* XLSXReader.swift in Sources */,
+				E4FAD96902F24453B895C3AF /* MiniZip.swift in Sources */,
+				C4E2536A09614D11BB25C99E /* ChannelMapping.swift in Sources */,
+				B473F3918AB34963AD9C8D3E /* MergeEngine.swift in Sources */,
+				DBEFAC7536AC42EBB999CC63 /* Exporter.swift in Sources */,
+				AA01BB02CC03DD04EE05FF06 /* MappingPlan.swift in Sources */,
+				CC01DD02EE03FF0405060701 /* ValueUnify.swift in Sources */,
+			); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		15890599FE7A442DB09A0B56 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.0;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				ONLY_ACTIVE_ARCH = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			}; name = Debug; };
+		1AF2217E64DA4A4D9BC88FA0 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.0;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				SWIFT_COMPILATION_MODE = wholemodule;
+			}; name = Release; };
+		11342CACCAFE4578AA5BF2D2 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = DataWizard/DataWizard.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "데이터 마법사";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.leeo.DataWizard";
+				PRODUCT_NAME = DataWizard;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+			}; name = Debug; };
+		20F8509FAE9C40A084F642F3 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = DataWizard/DataWizard.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "데이터 마법사";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.leeo.DataWizard";
+				PRODUCT_NAME = DataWizard;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+			}; name = Release; };
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		D1F3B215AE0D4BC9A28E78B8 /* Build configuration list for PBXProject "DataWizard" */ = {isa = XCConfigurationList; buildConfigurations = (
+			15890599FE7A442DB09A0B56 /* Debug */,
+			1AF2217E64DA4A4D9BC88FA0 /* Release */,
+		); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		C8718B5F69AA477CBAD2882C /* Build configuration list for PBXNativeTarget "DataWizard" */ = {isa = XCConfigurationList; buildConfigurations = (
+			11342CACCAFE4578AA5BF2D2 /* Debug */,
+			20F8509FAE9C40A084F642F3 /* Release */,
+		); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+/* End XCConfigurationList section */
+	};
+	rootObject = 262844CA665A44339F63AFA7 /* Project object */;
+}
