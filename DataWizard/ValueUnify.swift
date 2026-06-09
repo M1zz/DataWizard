@@ -1,10 +1,14 @@
 import Foundation
 
-/// One distinct value found in a merged column, with how many rows carry it.
+/// One distinct value found in a merged column, with how many rows carry it
+/// and the source files it appears in (by file name, sorted).
 struct DistinctValue: Identifiable {
-    var id: String { value }
+    // Unique per (value, source files) so same-value/different-file rows
+    // stay distinct in lists (동명이인은 별도 행).
+    var id: String { files.isEmpty ? value : value + "\u{1}" + files.joined(separator: ",") }
     let value: String
     let count: Int
+    var files: [String] = []
 }
 
 /// Discovers which merged columns hold categorical values worth unifying
@@ -23,32 +27,28 @@ enum ValueScanner {
     /// A column with more distinct values than this is treated as free-text, not categorical.
     static let maxDistinct = 40
 
-    /// The mapped (un-normalized) value of a unified column for one source row.
-    private static func value(_ col: UnifiedColumn, row: [String: String], plan: FilePlan) -> String {
-        guard let src = plan.mapping[col], !src.isEmpty else { return "" }
-        return (row[src] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
     /// Distinct non-empty values for a column across all files, most frequent first.
     static func distinct(_ col: UnifiedColumn, in plans: [FilePlan]) -> [DistinctValue] {
         var counts: [String: Int] = [:]
-        for plan in plans where !(plan.mapping[col] ?? "").isEmpty {
+        var files: [String: Set<String>] = [:]
+        for plan in plans where plan.isMapped(col) {
             for row in plan.rows {
-                let v = value(col, row: row, plan: plan)
+                let v = plan.compose(col, from: row)
                 if v.isEmpty { continue }
                 counts[v, default: 0] += 1
+                files[v, default: []].insert(plan.fileName)
             }
         }
         return counts
             .sorted { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }
-            .map { DistinctValue(value: $0.key, count: $0.value) }
+            .map { DistinctValue(value: $0.key, count: $0.value, files: (files[$0.key] ?? []).sorted()) }
     }
 
     /// Columns worth a value-unification pass: mapped somewhere, categorical, low-cardinality.
     static func candidates(in plans: [FilePlan]) -> [UnifiedColumn] {
         UnifiedColumn.allCases.filter { col in
             guard !freeText.contains(col) else { return false }
-            guard plans.contains(where: { !($0.mapping[col] ?? "").isEmpty }) else { return false }
+            guard plans.contains(where: { $0.isMapped(col) }) else { return false }
             let n = distinct(col, in: plans).count
             return n >= 2 && n <= maxDistinct
         }
@@ -80,6 +80,7 @@ struct ColumnReview: Identifiable {
     var values: [DistinctValue] = []     // categorical: distinct values to unify
     var examples: [ColumnExample] = []   // phone/date: original → normalized samples
     var samples: [String] = []           // freeText: a few sample values
+    var anomalies: [AnomalyDetector.Finding] = []  // freeText: values that look off
     var note: String = ""                // derived/freeText: short description
     var flaggedCount: Int = 0            // phone/date: rows needing attention
     var distinctCount: Int = 0
@@ -91,16 +92,15 @@ struct ColumnReview: Identifiable {
 enum ColumnReviewBuilder {
 
     static func mappedSomewhere(_ col: UnifiedColumn, in plans: [FilePlan]) -> Bool {
-        plans.contains { !($0.mapping[col] ?? "").isEmpty }
+        plans.contains { $0.isMapped(col) }
     }
 
-    /// Every non-empty mapped value of a column across all files.
+    /// Every non-empty composed value of a column across all files.
     static func rawValues(_ col: UnifiedColumn, in plans: [FilePlan]) -> [String] {
         var out: [String] = []
-        for plan in plans {
-            guard let src = plan.mapping[col], !src.isEmpty else { continue }
+        for plan in plans where plan.isMapped(col) {
             for row in plan.rows {
-                let v = (row[src] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                let v = plan.compose(col, from: row)
                 if !v.isEmpty { out.append(v) }
             }
         }
@@ -171,11 +171,65 @@ enum ColumnReviewBuilder {
                     let d = ValueScanner.distinct(col, in: plans)
                     return ColumnReview(column: col, kind: .freeText,
                                         samples: d.prefix(5).map { $0.value },
+                                        anomalies: AnomalyDetector.scan(d),
                                         note: "자유 입력 값이라 통일 없이 원본 그대로 저장됩니다.",
                                         distinctCount: d.count,
                                         total: d.reduce(0) { $0 + $1.count })
                 }
             }
+        }
+    }
+
+    /// Every value (with counts) for any final column — including derived ones —
+    /// for the detail viewer. Rows are split **per source file**: the same value
+    /// coming from two files becomes two rows, so 동명이인(같은 값·다른 출처)이
+    ///하나로 합쳐지지 않습니다. Most frequent first.
+    static func allValues(_ col: UnifiedColumn, in plans: [FilePlan]) -> [DistinctValue] {
+        switch col {
+        case .channel:
+            // One row per file (its channel label), so same-channel files stay separate.
+            return flatten(plans.reduce(into: [:]) { acc, plan in
+                acc[plan.channel.rawValue, default: [:]][plan.fileName, default: 0] += plan.rows.count
+            })
+        case .dupFlag:
+            return []   // decided during the merge
+        case .phoneClean:
+            return perFile(.phone, in: plans, clean: Normalizer.cleanPhone)
+        case .dobClean:
+            return perFile(.dob, in: plans, clean: Normalizer.cleanDate)
+        default:
+            return perFile(col, in: plans, clean: { $0 })
+        }
+    }
+
+    /// value -> file -> count, composing (and optionally cleaning) each row.
+    private static func perFile(_ col: UnifiedColumn, in plans: [FilePlan],
+                                clean: (String) -> String) -> [DistinctValue] {
+        var counts: [String: [String: Int]] = [:]
+        for plan in plans where plan.isMapped(col) {
+            for row in plan.rows {
+                let v = plan.compose(col, from: row)
+                if v.isEmpty { continue }
+                let c = clean(v)
+                if c.isEmpty { continue }
+                counts[c, default: [:]][plan.fileName, default: 0] += 1
+            }
+        }
+        return flatten(counts)
+    }
+
+    /// Expand a value→file→count map into one row per (value, file).
+    private static func flatten(_ counts: [String: [String: Int]]) -> [DistinctValue] {
+        var out: [DistinctValue] = []
+        for (value, perFile) in counts {
+            for (file, n) in perFile {
+                out.append(DistinctValue(value: value, count: n, files: [file]))
+            }
+        }
+        return out.sorted {
+            if $0.count != $1.count { return $0.count > $1.count }
+            if $0.value != $1.value { return $0.value > $1.value }
+            return ($0.files.first ?? "") < ($1.files.first ?? "")
         }
     }
 
@@ -191,6 +245,117 @@ enum ColumnReviewBuilder {
             if out.count >= 8 { break }
         }
         return out
+    }
+}
+
+// MARK: - Anomaly detection
+
+/// Flags values that deviate from a short, identifier-like column's typical
+/// shape — a name written "김-지호", stray/edge spaces, digits mixed into a
+/// Korean value, 한·영 혼용 — and proposes a cleanup the user can apply or edit.
+///
+/// Tuned for short Korean fields (이름·도시 등). Long-form text (essays,
+/// addresses, links) is left alone: those would drown in false positives.
+enum AnomalyDetector {
+
+    /// One flagged value: why it looks off, and a suggested cleanup.
+    struct Finding: Identifiable {
+        var id: String { value }
+        let value: String
+        let count: Int
+        let reason: String
+        let suggestion: String     // proposed cleanup; "" means flag-only (no safe auto-fix)
+        let files: [String]
+        var fixable: Bool { !suggestion.isEmpty && suggestion != value }
+    }
+
+    /// Columns whose median value is longer than this are skipped (free-form text).
+    static let maxMedianLength = 16
+
+    /// Characters that shouldn't sit between Korean syllables in a name/short value.
+    private static let separators = CharacterSet(charactersIn: "-_/·ㆍ.,|\\~")
+    private static let openBrackets = CharacterSet(charactersIn: "([{（【")
+
+    /// Findings for a column's distinct values, most frequent first.
+    static func scan(_ values: [DistinctValue]) -> [Finding] {
+        let nonEmpty = values.filter { !$0.value.isEmpty }
+        guard !nonEmpty.isEmpty else { return [] }
+        let lengths = nonEmpty.map { $0.value.count }.sorted()
+        let median = lengths[lengths.count / 2]
+        guard median <= maxMedianLength else { return [] }
+
+        var out: [Finding] = []
+        for dv in nonEmpty {
+            guard let (reason, suggestion) = classify(dv.value, median: median) else { continue }
+            out.append(Finding(value: dv.value, count: dv.count,
+                               reason: reason, suggestion: suggestion, files: dv.files))
+        }
+        return out.sorted { $0.count != $1.count ? $0.count > $1.count : $0.value < $1.value }
+    }
+
+    /// First matching rule wins. A "" suggestion means "flag only, no safe fix".
+    private static func classify(_ v: String, median: Int) -> (reason: String, suggestion: String)? {
+        // 1) leading/trailing or doubled-up whitespace
+        let collapsed = collapseWhitespace(v)
+        if collapsed != v {
+            return ("앞뒤·연속 공백이 있습니다", collapsed)
+        }
+        let hangul = hasHangul(v)
+        // 2) parenthetical 병기 in a Korean value, e.g. "김지호(Kim)"
+        if hangul, v.rangeOfCharacter(from: openBrackets) != nil {
+            let stripped = collapseWhitespace(stripParenthetical(v))
+            return ("괄호 안 병기가 포함돼 있습니다", stripped == v ? "" : stripped)
+        }
+        // 3) separator wedged between Korean syllables, e.g. "김-지호"
+        if hangul, v.rangeOfCharacter(from: separators) != nil {
+            let joined = collapseWhitespace(removeSeparators(v))
+            return ("값 사이에 구분 기호(\(firstSeparator(v)))가 있습니다", joined.isEmpty ? "" : joined)
+        }
+        // 4) digits mixed into a Korean value, e.g. "김지호1"
+        if hangul, v.contains(where: { $0.isNumber }) {
+            return ("숫자가 섞여 있습니다", "")
+        }
+        // 5) 한글·영문 혼용, e.g. "김Jiho"
+        if hangul, hasLatin(v) {
+            return ("한글과 영문이 섞여 있습니다", "")
+        }
+        // 6) unusually long for a very short field (e.g. two names run together)
+        if median <= 6, v.count >= 8, v.count > median * 3 {
+            return ("다른 값보다 유난히 깁니다", "")
+        }
+        return nil
+    }
+
+    // MARK: character classes
+
+    private static func hasHangul(_ s: String) -> Bool {
+        s.unicodeScalars.contains {
+            (0xAC00...0xD7A3).contains($0.value)   // 가-힣
+                || (0x1100...0x11FF).contains($0.value)   // Jamo
+                || (0x3130...0x318F).contains($0.value)   // compatibility Jamo
+        }
+    }
+    private static func hasLatin(_ s: String) -> Bool {
+        s.contains { $0.isLetter && $0.isASCII }
+    }
+
+    // MARK: cleanups
+
+    private static func collapseWhitespace(_ s: String) -> String {
+        s.components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+    private static func removeSeparators(_ s: String) -> String {
+        String(String.UnicodeScalarView(s.unicodeScalars.filter { !separators.contains($0) }))
+    }
+    private static func stripParenthetical(_ s: String) -> String {
+        let pattern = "\\s*[\\(\\[\\{（【][^\\)\\]\\}）】]*[\\)\\]\\}）】]"
+        return s.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
+    }
+    private static func firstSeparator(_ s: String) -> String {
+        for ch in s where String(ch).rangeOfCharacter(from: separators) != nil { return String(ch) }
+        return ""
     }
 }
 
@@ -246,5 +411,96 @@ enum ValueCanonicalizer {
             }
         }
         return out
+    }
+}
+
+// MARK: - Regex cleanup presets
+
+/// One reusable find-and-replace rule the user can toggle on for a column.
+/// `pattern` is an ICU regular expression; matches are replaced with `replacement`.
+struct RegexPreset: Identifiable, Hashable {
+    let id: String
+    let name: String
+    let summary: String
+    let pattern: String
+    let replacement: String
+    let example: String     // "원본 → 결과", for the picker
+}
+
+/// A menu of regexes that come up constantly in data cleaning. The user picks
+/// which to apply to a column (optionally adding their own), previews the
+/// result, then commits — the cleaned values flow through the merge's valueMap.
+enum RegexLibrary {
+
+    static let presets: [RegexPreset] = [
+        RegexPreset(id: "trim", name: "앞뒤 공백 제거",
+                    summary: "값 양 끝의 공백을 없앱니다.",
+                    pattern: "^\\s+|\\s+$", replacement: "",
+                    example: "‘ 김지호 ’ → ‘김지호’"),
+        RegexPreset(id: "collapse", name: "연속 공백 → 한 칸",
+                    summary: "여러 칸 띄어쓰기를 한 칸으로 줄입니다.",
+                    pattern: "\\s{2,}", replacement: " ",
+                    example: "‘김  지호’ → ‘김 지호’"),
+        RegexPreset(id: "nospace", name: "모든 공백 제거",
+                    summary: "값 안의 모든 띄어쓰기를 없앱니다.",
+                    pattern: "\\s+", replacement: "",
+                    example: "‘김 지 호’ → ‘김지호’"),
+        RegexPreset(id: "parens", name: "괄호와 안의 내용 제거",
+                    summary: "(), [], {} 안의 병기를 지웁니다.",
+                    pattern: "\\s*[\\(\\[\\{（【][^\\)\\]\\}）】]*[\\)\\]\\}）】]", replacement: "",
+                    example: "‘김지호(Kim)’ → ‘김지호’"),
+        RegexPreset(id: "special", name: "특수문자 제거",
+                    summary: "한글·영문·숫자·공백만 남깁니다.",
+                    pattern: "[^0-9A-Za-z가-힣\\s]", replacement: "",
+                    example: "‘김*지호!’ → ‘김지호’"),
+        RegexPreset(id: "nodigit", name: "숫자 제거",
+                    summary: "값에 섞인 숫자를 모두 지웁니다.",
+                    pattern: "[0-9]", replacement: "",
+                    example: "‘김지호1’ → ‘김지호’"),
+        RegexPreset(id: "digitonly", name: "숫자만 남기기",
+                    summary: "숫자가 아닌 문자를 모두 지웁니다.",
+                    pattern: "[^0-9]", replacement: "",
+                    example: "‘010-1234’ → ‘0101234’"),
+        RegexPreset(id: "hangulonly", name: "한글만 남기기",
+                    summary: "한글과 공백만 남기고 나머지를 지웁니다.",
+                    pattern: "[^가-힣\\s]", replacement: "",
+                    example: "‘김지호Kim’ → ‘김지호’"),
+        RegexPreset(id: "jamo", name: "낱자(ㅋㅋ·ㅎㅎ) 제거",
+                    summary: "홀로 쓰인 자음·모음을 지웁니다.",
+                    pattern: "[ㄱ-ㅎㅏ-ㅣ]+", replacement: "",
+                    example: "‘김지호ㅋㅋ’ → ‘김지호’"),
+        RegexPreset(id: "html", name: "HTML 태그 제거",
+                    summary: "<b>…</b> 같은 태그를 지웁니다.",
+                    pattern: "<[^>]+>", replacement: "",
+                    example: "‘<b>김</b>’ → ‘김’"),
+        RegexPreset(id: "emoji", name: "이모지 제거",
+                    summary: "그림 이모지를 지웁니다.",
+                    pattern: "[\\x{1F000}-\\x{1FAFF}\\x{2600}-\\x{27BF}\\x{FE0F}\\x{2190}-\\x{21FF}]",
+                    replacement: "",
+                    example: "‘김지호😀’ → ‘김지호’"),
+        RegexPreset(id: "invisible", name: "보이지 않는 문자 제거",
+                    summary: "제로폭 공백 등 숨은 문자를 지웁니다.",
+                    pattern: "[\\x{200B}-\\x{200D}\\x{FEFF}\\x{00AD}]", replacement: "",
+                    example: "‘김\u{200B}지호’ → ‘김지호’")
+    ]
+}
+
+/// Applies an ordered list of regex presets to a value, in sequence.
+enum RegexCleaner {
+
+    /// Is this a valid ICU regular expression?
+    static func isValid(_ pattern: String) -> Bool {
+        (try? NSRegularExpression(pattern: pattern)) != nil
+    }
+
+    /// Run each preset's find-and-replace over `value`, in order. Invalid
+    /// patterns are skipped so one bad rule can't break the rest.
+    static func apply(_ presets: [RegexPreset], to value: String) -> String {
+        var v = value
+        for p in presets where isValid(p.pattern) {
+            v = v.replacingOccurrences(of: p.pattern, with: p.replacement,
+                                       options: .regularExpression)
+        }
+        return v
     }
 }

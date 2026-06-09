@@ -61,22 +61,16 @@ struct MergeEngine {
 
     // MARK: - mapping
 
-    /// Map one source row into the unified schema using a file's reviewed mapping.
+    /// Map one source row into the unified schema by composing each column's
+    /// configured source columns, then applying any value unification.
     private func map(_ src: [String: String], using plan: FilePlan) -> ApplicantRow {
         var row = ApplicantRow()
         row[.channel] = plan.channel.rawValue
 
-        for (unified, sourceKey) in plan.mapping where !sourceKey.isEmpty {
-            var value = (src[sourceKey] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        for unified in plan.sources.keys where plan.isMapped(unified) {
+            var value = plan.compose(unified, from: src)
             if let canonical = valueMap[unified]?[value] { value = canonical }
             row[unified] = value
-        }
-
-        // 간편지원: build the full Korean name as "성 이름" (surname + given).
-        if !plan.surnameColumn.isEmpty {
-            let surname = (src[plan.surnameColumn] ?? "").trimmingCharacters(in: .whitespaces)
-            let given = row[.koreanName]
-            row[.koreanName] = [surname, given].filter { !$0.isEmpty }.joined()
         }
 
         normalizeDerivedFields(&row)

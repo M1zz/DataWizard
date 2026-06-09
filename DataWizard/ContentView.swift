@@ -13,6 +13,9 @@ struct ContentView: View {
     @State private var reviews: [ColumnReview] = []
     @State private var valueMap: [UnifiedColumn: [String: String]] = [:]
     @State private var checked: Set<UnifiedColumn> = []
+    @State private var detailColumn: UnifiedColumn?
+    @State private var configColumn: UnifiedColumn?
+    @State private var regexColumn: UnifiedColumn?
 
     @State private var result: MergeResult?
     @State private var errorMessage: String?
@@ -30,6 +33,29 @@ struct ContentView: View {
         }
         .frame(minWidth: 820, minHeight: 580)
         .background(Color(nsColor: .windowBackgroundColor))
+        .sheet(item: $detailColumn) { col in detailSheet(col) }
+        .sheet(item: $configColumn) { col in
+            ColumnSourceSheet(column: col, plans: $plans, onClose: { configColumn = nil })
+        }
+        .sheet(item: $regexColumn) { col in
+            // Cleanup is value-based, so aggregate across files (one row per value).
+            RegexCleanupSheet(column: col,
+                              values: ValueScanner.distinct(col, in: plans),
+                              mapping: bindingForColumn(col),
+                              onClose: { regexColumn = nil })
+        }
+    }
+
+    /// Detail viewer for one column, with the same anomaly flags used in review.
+    private func detailSheet(_ col: UnifiedColumn) -> some View {
+        let vals = ColumnReviewBuilder.allValues(col, in: plans)
+        let reasons = Dictionary(AnomalyDetector.scan(vals).map { ($0.value, $0.reason) },
+                                 uniquingKeysWith: { first, _ in first })
+        return ColumnDetailView(columnName: col.rawValue,
+                                values: vals,
+                                mapping: valueMap[col] ?? [:],
+                                anomalyReasons: reasons,
+                                onClose: { detailColumn = nil })
     }
 
     // MARK: - Stage 1: add files (centered onboarding)
@@ -103,7 +129,12 @@ struct ContentView: View {
                     ForEach(reviews) { review in
                         ReviewSection(title: review.column.rawValue,
                                       subtitle: subtitle(for: review),
-                                      isChecked: checkBinding(review.column)) {
+                                      isChecked: checkBinding(review.column),
+                                      onDetail: { detailColumn = review.column },
+                                      onConfigure: review.kind == .derived ? nil
+                                        : { configColumn = review.column },
+                                      onRegex: (review.kind == .category || review.kind == .freeText)
+                                        ? { regexColumn = review.column } : nil) {
                             body(for: review)
                         }
                     }
@@ -168,29 +199,37 @@ struct ContentView: View {
         case .phone, .date:
             ExamplesBody(note: review.note, examples: review.examples)
         case .freeText:
-            SamplesBody(note: review.note, samples: review.samples, distinctCount: review.distinctCount)
+            FreeTextBody(note: review.note,
+                         samples: review.samples,
+                         distinctCount: review.distinctCount,
+                         anomalies: review.anomalies,
+                         mapping: bindingForColumn(review.column))
         case .derived:
             NoteBody(note: review.note)
         }
     }
 
     private func subtitle(for review: ColumnReview) -> String {
+        let base: String
         switch review.kind {
         case .category:
-            return "값 통일 · \(review.distinctCount)종 값 · \(review.total)행"
+            base = "값 통일 · \(review.distinctCount)종 값 · \(review.total)행"
         case .phone:
-            return review.flaggedCount > 0
+            base = review.flaggedCount > 0
                 ? "전화번호 정규화 · 표준(010-) 아님 \(review.flaggedCount)종"
                 : "전화번호 정규화 · 모두 표준 형식"
         case .date:
-            return review.flaggedCount > 0
+            base = review.flaggedCount > 0
                 ? "생년월일 정규화 · 인식 못함 \(review.flaggedCount)종"
                 : "생년월일 정규화 · 모두 인식됨"
         case .freeText:
-            return "자유 입력 · \(review.distinctCount)종 값 · \(review.total)행"
+            base = "자유 입력 · \(review.distinctCount)종 값 · \(review.total)행"
+                + (review.anomalies.isEmpty ? "" : " · ⚠︎ 점검 필요 \(review.anomalies.count)건")
         case .derived:
             return "자동 생성 컬럼"
         }
+        let composite = plans.filter { ($0.sources[review.column]?.count ?? 0) > 1 }.count
+        return composite > 0 ? "\(base) · \(composite)개 파일에서 컬럼 조합" : base
     }
 
     // MARK: - Stage 3: result (full width)
@@ -422,6 +461,141 @@ struct ContentView: View {
 
 private let xlsxType = UTType(filenameExtension: "xlsx") ?? .data
 
+extension UnifiedColumn: Identifiable {
+    public var id: String { rawValue }
+}
+
+/// Full-detail viewer for one column: every distinct value with counts,
+/// the unified value (if any), searchable and selectable.
+struct ColumnDetailView: View {
+    let columnName: String
+    let values: [DistinctValue]
+    let mapping: [String: String]
+    var anomalyReasons: [String: String] = [:]   // value → why it looks off
+    let onClose: () -> Void
+
+    @State private var query = ""
+
+    private var filtered: [DistinctValue] {
+        guard !query.isEmpty else { return values }
+        return values.filter { $0.value.localizedCaseInsensitiveContains(query) }
+    }
+    private var totalRows: Int { values.reduce(0) { $0 + $1.count } }
+    private var valueKinds: Int { Set(values.map { $0.value }).count }
+    private var showsUnified: Bool { mapping.contains { $0.key != $0.value } }
+    /// Same value appearing in more than one source file → 동명이인 후보.
+    private var splitCount: Int { values.count - valueKinds }
+
+    /// All source files present in this column, in stable order, for color assignment.
+    private var allFiles: [String] {
+        Array(Set(values.flatMap { $0.files })).sorted()
+    }
+    private var showsSource: Bool { !allFiles.isEmpty }
+
+    private static let palette: [Color] =
+        [.blue, .green, .orange, .purple, .pink, .teal, .red, .indigo]
+
+    private func color(for file: String) -> Color {
+        guard let i = allFiles.firstIndex(of: file) else { return .secondary }
+        return Self.palette[i % Self.palette.count]
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(columnName).font(.headline)
+                    Text("\(valueKinds)종 값 · \(totalRows)행"
+                         + (splitCount > 0 ? " · 출처 분리 \(values.count)행" : "")
+                         + (anomalyReasons.isEmpty ? "" : " · ⚠︎ 점검 \(anomalyReasons.count)건"))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("닫기", action: onClose).keyboardShortcut(.cancelAction)
+            }
+            .padding(16)
+            Divider()
+
+            if values.isEmpty {
+                VStack(spacing: 6) {
+                    Image(systemName: "tray").font(.system(size: 28)).foregroundStyle(.tertiary)
+                    Text("표시할 값이 없습니다.\n(병합 후 결정되는 값일 수 있어요.)")
+                        .font(.callout).foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                TextField("값 검색…", text: $query)
+                    .textFieldStyle(.roundedBorder)
+                    .padding(.horizontal, 16).padding(.vertical, 10)
+
+                ScrollView {
+                    LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+                        Section {
+                            ForEach(filtered) { dv in
+                                HStack(spacing: 12) {
+                                    HStack(spacing: 5) {
+                                        if let reason = anomalyReasons[dv.value] {
+                                            Image(systemName: "exclamationmark.triangle.fill")
+                                                .font(.caption2).foregroundStyle(.orange)
+                                                .help(reason)
+                                        }
+                                        Text(dv.value.isEmpty ? "(빈 값)" : dv.value)
+                                            .font(.callout)
+                                            .foregroundStyle(dv.value.isEmpty ? .secondary : .primary)
+                                            .textSelection(.enabled)
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    if showsSource {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            ForEach(dv.files, id: \.self) { file in
+                                                HStack(spacing: 4) {
+                                                    Circle().fill(color(for: file))
+                                                        .frame(width: 7, height: 7)
+                                                    Text(file)
+                                                        .font(.caption2)
+                                                        .foregroundStyle(.secondary)
+                                                        .lineLimit(1).truncationMode(.middle)
+                                                }
+                                            }
+                                        }
+                                        .frame(width: 160, alignment: .leading)
+                                        .help(dv.files.joined(separator: "\n"))
+                                    }
+                                    Text("\(dv.count)")
+                                        .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                                        .frame(width: 56, alignment: .trailing)
+                                    if showsUnified {
+                                        let canonical = mapping[dv.value] ?? dv.value
+                                        Text(canonical)
+                                            .font(.caption)
+                                            .foregroundStyle(canonical != dv.value ? Color.accentColor : .secondary)
+                                            .frame(width: 150, alignment: .leading)
+                                            .lineLimit(1).truncationMode(.tail)
+                                    }
+                                }
+                                .padding(.horizontal, 16).padding(.vertical, 6)
+                                Divider()
+                            }
+                        } header: {
+                            HStack(spacing: 12) {
+                                Text("값").frame(maxWidth: .infinity, alignment: .leading)
+                                if showsSource { Text("출처 파일").frame(width: 160, alignment: .leading) }
+                                Text("건수").frame(width: 56, alignment: .trailing)
+                                if showsUnified { Text("통일 값").frame(width: 150, alignment: .leading) }
+                            }
+                            .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                            .padding(.horizontal, 16).padding(.vertical, 6)
+                            .background(Color(nsColor: .windowBackgroundColor))
+                        }
+                    }
+                }
+            }
+        }
+        .frame(width: showsSource ? 740 : 580, height: 580)
+    }
+}
+
 struct Stat: View {
     let label: String
     let value: String
@@ -473,6 +647,9 @@ struct ReviewSection<Content: View>: View {
     let title: String
     let subtitle: String
     @Binding var isChecked: Bool
+    var onDetail: (() -> Void)? = nil
+    var onConfigure: (() -> Void)? = nil
+    var onRegex: (() -> Void)? = nil
     @ViewBuilder var content: () -> Content
 
     var body: some View {
@@ -487,12 +664,39 @@ struct ReviewSection<Content: View>: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 12)
+                if let onRegex {
+                    Button(action: onRegex) {
+                        Image(systemName: "curlybraces")
+                    }
+                    .controlSize(.small)
+                    .help("정규식 규칙을 골라 이 컬럼 값을 일괄 정리합니다.")
+                }
+                if let onConfigure {
+                    Button(action: onConfigure) {
+                        Image(systemName: "slider.horizontal.3")
+                    }
+                    .controlSize(.small)
+                    .help("이 컬럼을 어떤 원본 컬럼들에서 가져올지(조합) 설정합니다.")
+                }
+                if let onDetail {
+                    Button(action: onDetail) {
+                        Image(systemName: "list.bullet.rectangle")
+                    }
+                    .controlSize(.small)
+                    .help("이 컬럼의 모든 값을 자세히 봅니다.")
+                }
+                if isChecked {
+                    Label("완료", systemImage: "checkmark.circle.fill")
+                        .font(.caption).foregroundStyle(.green)
+                }
                 Toggle(isOn: $isChecked) { Text("이대로 OK") }
                     .toggleStyle(.checkbox)
                     .font(.callout)
                     .fixedSize()
             }
-            content()
+            if !isChecked {
+                content()
+            }
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -630,6 +834,385 @@ struct SamplesBody: View {
                 }
             }
         }
+    }
+}
+
+/// Body for a free-text column: surfaces values that look off (구분 기호, 공백,
+/// 숫자 혼입 등) with an editable correction per value, then a few samples.
+/// Corrections flow through the same valueMap the merge applies to every column.
+struct FreeTextBody: View {
+    let note: String
+    let samples: [String]
+    let distinctCount: Int
+    let anomalies: [AnomalyDetector.Finding]
+    @Binding var mapping: [String: String]
+
+    private var fixable: [AnomalyDetector.Finding] { anomalies.filter { $0.fixable } }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if !anomalies.isEmpty { anomalyBox }
+            SamplesBody(note: note, samples: samples, distinctCount: distinctCount)
+        }
+    }
+
+    private var anomalyBox: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label("점검이 필요한 값 \(anomalies.count)건", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption.weight(.semibold)).foregroundStyle(.orange)
+                Spacer()
+                if !fixable.isEmpty {
+                    Button {
+                        for f in fixable { mapping[f.value] = f.suggestion }
+                    } label: {
+                        Label("추천값으로 일괄 수정 (\(fixable.count))", systemImage: "wand.and.stars")
+                    }
+                    .controlSize(.small)
+                    .help("자동으로 고칠 수 있는 값을 추천 형태로 한 번에 바꿉니다. 이후 직접 수정할 수 있어요.")
+                }
+            }
+
+            HStack(spacing: 10) {
+                Text("원본 값").frame(width: 150, alignment: .leading)
+                Text("건수").frame(width: 40, alignment: .trailing)
+                Text("사유").frame(width: 190, alignment: .leading)
+                Text("수정 값").frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+
+            ForEach(anomalies) { f in
+                let current = mapping[f.value] ?? f.value
+                let changed = current != f.value
+                HStack(alignment: .top, spacing: 10) {
+                    Text(f.value)
+                        .font(.callout)
+                        .frame(width: 150, alignment: .leading)
+                        .lineLimit(1).truncationMode(.middle)
+                        .help(f.files.isEmpty ? f.value : "\(f.value)\n출처: \(f.files.joined(separator: ", "))")
+                    Text("\(f.count)")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .frame(width: 40, alignment: .trailing)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(f.reason)
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if f.fixable && !changed {
+                            Button("추천: \(f.suggestion)") { mapping[f.value] = f.suggestion }
+                                .buttonStyle(.link).font(.caption2)
+                        }
+                    }
+                    .frame(width: 190, alignment: .leading)
+                    HStack(spacing: 6) {
+                        Image(systemName: changed ? "arrow.right" : "equal")
+                            .font(.caption2)
+                            .foregroundStyle(changed ? Color.accentColor : Color.secondary)
+                        TextField("", text: Binding(
+                            get: { mapping[f.value] ?? f.value },
+                            set: { mapping[f.value] = $0 }
+                        ))
+                        .textFieldStyle(.roundedBorder)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+        .padding(10)
+        .background(Color.orange.opacity(0.06))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.orange.opacity(0.25)))
+    }
+}
+
+/// Pick regex cleanup rules for one column, preview what changes, then commit.
+/// Selected rules apply in order to every distinct value; results are written to
+/// the column's valueMap, which the merge applies like any other unification.
+struct RegexCleanupSheet: View {
+    let column: UnifiedColumn
+    let values: [DistinctValue]
+    @Binding var mapping: [String: String]
+    let onClose: () -> Void
+
+    @State private var selected: Set<String> = []
+    @State private var customPattern = ""
+    @State private var customReplacement = ""
+
+    private var customError: String? {
+        guard !customPattern.isEmpty else { return nil }
+        return RegexCleaner.isValid(customPattern) ? nil : "정규식 형식이 올바르지 않습니다."
+    }
+
+    /// Selected presets in library order, plus a valid custom rule last.
+    private var activePresets: [RegexPreset] {
+        var list = RegexLibrary.presets.filter { selected.contains($0.id) }
+        if !customPattern.isEmpty, customError == nil {
+            list.append(RegexPreset(id: "custom", name: "직접 입력", summary: "",
+                                    pattern: customPattern, replacement: customReplacement, example: ""))
+        }
+        return list
+    }
+
+    private struct Change: Identifiable {
+        var id: String { from }
+        let from: String
+        let to: String
+        let count: Int
+    }
+
+    private var changes: [Change] {
+        guard !activePresets.isEmpty else { return [] }
+        return values.compactMap { dv in
+            let out = RegexCleaner.apply(activePresets, to: dv.value)
+            return out == dv.value ? nil : Change(from: dv.value, to: out, count: dv.count)
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    presetList
+                    customRow
+                    previewSection
+                }
+                .padding(16)
+            }
+            Divider()
+            footer
+        }
+        .frame(width: 660, height: 680)
+    }
+
+    private var header: some View {
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("‘\(column.rawValue)’ 정규식 클렌징").font(.headline)
+                Text("적용할 규칙을 고르면 아래에서 바뀔 값을 미리 볼 수 있어요. 위에서부터 차례로 적용됩니다.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            Button("닫기", action: onClose).keyboardShortcut(.cancelAction)
+        }
+        .padding(16)
+    }
+
+    private var presetList: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("자주 쓰는 규칙")
+                .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            ForEach(RegexLibrary.presets) { preset in
+                Toggle(isOn: Binding(
+                    get: { selected.contains(preset.id) },
+                    set: { if $0 { selected.insert(preset.id) } else { selected.remove(preset.id) } }
+                )) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        HStack(spacing: 8) {
+                            Text(preset.name).font(.callout.weight(.medium))
+                            Text(preset.pattern)
+                                .font(.caption2.monospaced()).foregroundStyle(.tertiary)
+                                .lineLimit(1).truncationMode(.tail)
+                        }
+                        Text("\(preset.summary)  \(preset.example)")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .lineLimit(1).truncationMode(.tail)
+                    }
+                }
+                .toggleStyle(.checkbox)
+            }
+        }
+    }
+
+    private var customRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("직접 입력")
+                .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                TextField("패턴 (정규식)", text: $customPattern)
+                    .textFieldStyle(.roundedBorder).font(.callout.monospaced())
+                Image(systemName: "arrow.right").font(.caption2).foregroundStyle(.secondary)
+                TextField("치환할 값 (비우면 삭제)", text: $customReplacement)
+                    .textFieldStyle(.roundedBorder).font(.callout.monospaced())
+                    .frame(width: 180)
+            }
+            if let customError {
+                Label(customError, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption).foregroundStyle(.red)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var previewSection: some View {
+        let total = values.count
+        HStack {
+            Text("미리보기")
+                .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            Spacer()
+            Text(activePresets.isEmpty ? "규칙을 선택하세요"
+                 : "변경 \(changes.count)종 / 전체 \(total)종")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+
+        if !activePresets.isEmpty {
+            if changes.isEmpty {
+                Text("선택한 규칙으로 바뀌는 값이 없습니다.")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(changes) { c in
+                        HStack(spacing: 8) {
+                            Text(c.from.isEmpty ? "(빈 값)" : c.from)
+                                .font(.callout)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .lineLimit(1).truncationMode(.middle).help(c.from)
+                            Image(systemName: "arrow.right")
+                                .font(.caption2).foregroundStyle(.secondary)
+                            Text(c.to.isEmpty ? "(빈 값)" : c.to)
+                                .font(.callout)
+                                .foregroundStyle(c.to.isEmpty ? .secondary : Color.accentColor)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .lineLimit(1).truncationMode(.middle).help(c.to)
+                            Text("\(c.count)")
+                                .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                                .frame(width: 44, alignment: .trailing)
+                        }
+                        .padding(.vertical, 5)
+                        Divider()
+                    }
+                }
+                .padding(.horizontal, 10)
+                .background(Color(nsColor: .controlBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+        }
+    }
+
+    private var footer: some View {
+        HStack {
+            Text("적용하면 위 변경이 ‘\(column.rawValue)’ 값에 반영됩니다.")
+                .font(.caption).foregroundStyle(.secondary)
+            Spacer()
+            Button("취소", action: onClose)
+            Button("적용 (\(changes.count))") {
+                for c in changes { mapping[c.from] = c.to }
+                onClose()
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(changes.isEmpty)
+        }
+        .padding(16)
+    }
+}
+
+/// Configure how one unified column is sourced from each file: pick an ordered
+/// set of source columns to combine (1 = plain mapping, 2+ = composite like
+/// 성 + 이름), with a shared separator and a live preview.
+struct ColumnSourceSheet: View {
+    let column: UnifiedColumn
+    @Binding var plans: [FilePlan]
+    let onClose: () -> Void
+
+    private let maxSlots = 4
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("‘\(column.rawValue)’ 가져오기 설정").font(.headline)
+                    Text("각 파일에서 이 컬럼을 만들 원본 컬럼을 고르세요. 여러 개를 고르면 순서대로 이어 붙입니다.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+                Button("닫기", action: onClose).keyboardShortcut(.defaultAction)
+            }
+            .padding(16)
+
+            HStack(spacing: 8) {
+                Text("이어 붙일 때 구분자").font(.callout)
+                TextField("예: 공백, - 등 (비우면 붙여 씀)", text: separatorBinding)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 220)
+                Spacer()
+            }
+            .padding(.horizontal, 16).padding(.bottom, 12)
+
+            Divider()
+
+            ScrollView {
+                VStack(spacing: 12) {
+                    ForEach($plans) { $plan in
+                        fileRow($plan)
+                    }
+                }
+                .padding(16)
+            }
+        }
+        .frame(width: 640, height: 560)
+    }
+
+    private func fileRow(_ plan: Binding<FilePlan>) -> some View {
+        let current = plan.wrappedValue.sources[column] ?? []
+        let slotCount = min(maxSlots, current.count + 1)
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(plan.wrappedValue.fileName).font(.callout.weight(.medium))
+                    .lineLimit(1).truncationMode(.middle).help(plan.wrappedValue.fileName)
+                Spacer()
+                Text("→ \(previewValue(plan.wrappedValue).isEmpty ? "—" : previewValue(plan.wrappedValue))")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.tail)
+            }
+            HStack(spacing: 8) {
+                ForEach(0..<slotCount, id: \.self) { i in
+                    if i > 0 {
+                        Image(systemName: "plus").font(.caption2).foregroundStyle(.tertiary)
+                    }
+                    Picker("", selection: slotBinding(plan, i)) {
+                        Text(i == 0 ? "— 없음 —" : "— 추가 —").tag("")
+                        ForEach(plan.wrappedValue.headers, id: \.self) { Text($0).tag($0) }
+                    }
+                    .labelsHidden().frame(width: 180)
+                }
+                Spacer()
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func previewValue(_ plan: FilePlan) -> String {
+        guard let first = plan.rows.first else { return "" }
+        return plan.compose(column, from: first)
+    }
+
+    private var separatorBinding: Binding<String> {
+        Binding(
+            get: { plans.first(where: { $0.separators[column] != nil })?.separators[column] ?? "" },
+            set: { sep in for i in plans.indices { plans[i].separators[column] = sep } }
+        )
+    }
+
+    private func slotBinding(_ plan: Binding<FilePlan>, _ index: Int) -> Binding<String> {
+        Binding(
+            get: {
+                let arr = plan.wrappedValue.sources[column] ?? []
+                return index < arr.count ? arr[index] : ""
+            },
+            set: { newValue in
+                var arr = plan.wrappedValue.sources[column] ?? []
+                while arr.count <= index { arr.append("") }
+                arr[index] = newValue
+                arr = arr.filter { !$0.isEmpty }
+                plan.wrappedValue.sources[column] = arr
+            }
+        )
     }
 }
 
