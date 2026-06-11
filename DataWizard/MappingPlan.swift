@@ -17,9 +17,41 @@ struct FilePlan: Identifiable {
 
     var fileName: String { url.lastPathComponent }
 
+    /// The 지원방식 label written to each row. 일반 stays as-is; 간편지원 is split
+    /// into Public/Private by file name, since the source form leaves the
+    /// "지원 방식" field blank (spec Step 1-4: 지원 방식 구분값 추가).
+    var applicationType: String {
+        switch channel {
+        case .general:
+            return Channel.general.rawValue
+        case .simple:
+            let n = fileName.lowercased()
+            if n.contains("public") { return "간편지원(Public)" }
+            if n.contains("private") { return "간편지원(Private)" }
+            return Channel.simple.rawValue
+        }
+    }
+
     /// Is this column sourced from at least one real source column?
     func isMapped(_ col: UnifiedColumn) -> Bool {
         (sources[col]?.contains { !$0.isEmpty }) ?? false
+    }
+
+    /// The single column used as this file's 출처 키 (row locator). Fixed per
+    /// file — never mixed per row — so every key can be looked up in the same
+    /// original column: Code if the file has one, else Email, else row numbers.
+    var refColumn: UnifiedColumn? {
+        if isMapped(.code) { return .code }
+        if isMapped(.email) { return .email }
+        return nil
+    }
+
+    /// This file's 출처 키 for one row, always read from `refColumn`.
+    /// An empty cell falls back to the row number so the row stays findable.
+    func rowRef(_ row: [String: String], index: Int) -> String {
+        guard let col = refColumn else { return "행 \(index + 1)" }
+        let v = compose(col, from: row)
+        return v.isEmpty ? "행 \(index + 1)" : v
     }
 
     /// Combine this column's source values for one row, in order, skipping blanks.
@@ -29,7 +61,16 @@ struct FilePlan: Identifiable {
             let v = (row[c] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             return v.isEmpty ? nil : v
         }
-        return parts.joined(separator: separators[col] ?? "")
+        let joined = parts.joined(separator: separators[col] ?? "")
+
+        // 간편지원 국가: ‘그 외 국가’를 고르면 실제 국가명 컬럼의 값으로 치환해
+        // 최종본처럼 진짜 국가명이 남도록 한다 (값 통일에서 영문으로 정리 가능).
+        if col == .country, channel == .simple, joined == "그 외 국가" {
+            let name = (row[ChannelMapping.simpleCountryNameColumn] ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !name.isEmpty { return name }
+        }
+        return joined
     }
 }
 
@@ -97,6 +138,21 @@ enum PlanBuilder {
         var sources: [UnifiedColumn: [String]] = [:]
         for (unified, source) in defaults where headerSet.contains(source) {
             sources[unified] = [source]
+        }
+
+        if channel == .simple {
+            // Headers whose spelling varies between Public/Private exports.
+            for (unified, candidates) in ChannelMapping.simpleAlternates where sources[unified] == nil {
+                if let hit = candidates.first(where: { headerSet.contains($0) }) {
+                    sources[unified] = [hit]
+                }
+            }
+            // Current Status = 대학 단계 + 그 외 신분 (행마다 한쪽만 채워짐).
+            let status = ChannelMapping.simpleStatusSources.filter { headerSet.contains($0) }
+            if !status.isEmpty { sources[.currentStatus] = status }
+            // School/University/Company = 재학 → 졸업 → 회사.
+            let school = ChannelMapping.simpleSchoolSources.filter { headerSet.contains($0) }
+            if !school.isEmpty { sources[.schoolCompany] = school }
         }
 
         // Name: prepend the surname column when the layout splits 성 / 이름.

@@ -21,4 +21,13 @@ enum Exporter {
         let csv = makeCSV(from: result, excludeRemoved: excludeRemoved)
         try csv.data(using: .utf8)?.write(to: url)
     }
+
+    /// Write the verification report: every cell the merge changed, one line per
+    /// change, traceable to its source row. 원본과 대조해 100% 검증하는 용도.
+    static func writeChanges(_ changes: [ChangeRecord], to url: URL) throws {
+        let headers = ["파일", "출처 키", "컬럼", "이전 값", "이후 값"]
+        let rows = changes.map { [$0.file, $0.ref, $0.column.rawValue, $0.before, $0.after] }
+        let csv = CSVParser.write(headers: headers, rows: rows)
+        try csv.data(using: .utf8)?.write(to: url)
+    }
 }
