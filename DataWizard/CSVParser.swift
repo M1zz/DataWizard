@@ -78,11 +78,22 @@ enum CSVParser {
     }
 
     /// Read a CSV file from disk into its ordered header plus header-keyed rows.
+    /// Duplicate header names (Wix exports repeat e.g. ‘최종 학력을 선택해주세요.’)
+    /// are disambiguated as “이름 (2)”, “이름 (3)” so no column silently
+    /// overwrites another — the first occurrence keeps the original name.
     static func readTable(at url: URL) throws -> (headers: [String], rows: [[String: String]]) {
         let data = try Data(contentsOf: url)
         let text = String(decoding: data, as: UTF8.self)
         let parsed = parse(text)
-        guard let header = parsed.first else { return ([], []) }
+        guard let rawHeader = parsed.first else { return ([], []) }
+
+        var seen: [String: Int] = [:]
+        let header = rawHeader.map { name -> String in
+            let n = (seen[name] ?? 0) + 1
+            seen[name] = n
+            return n == 1 ? name : "\(name) (\(n))"
+        }
+
         var out: [[String: String]] = []
         for r in parsed.dropFirst() {
             // Skip blank lines

@@ -20,6 +20,9 @@
 		AA01BB02CC03DD04EE05FF06 /* MappingPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD44EE55FF66 /* MappingPlan.swift */; };
 		BB01CC02DD03EE04FF050601 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = BB11CC22DD33EE44FF556601 /* Assets.xcassets */; };
 		CC01DD02EE03FF0405060701 /* ValueUnify.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC11DD22EE33FF4455660701 /* ValueUnify.swift */; };
+		CC01DD09EE03FF0405060709 /* SessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC11DD29EE33FF4455660709 /* SessionStore.swift */; };
+		FA01FA02FA03FA04FA05FA06 /* MappingPresets.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA11FA22FA33FA44FA55FA66 /* MappingPresets.swift */; };
+		CC01DD03EE03FF0405060702 /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC11DD23EE33FF4455660702 /* AppSettings.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -36,6 +39,9 @@
 		AA11BB22CC33DD44EE55FF66 /* MappingPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MappingPlan.swift"; sourceTree = "<group>"; };
 		BB11CC22DD33EE44FF556601 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Assets.xcassets"; sourceTree = "<group>"; };
 		CC11DD22EE33FF4455660701 /* ValueUnify.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ValueUnify.swift"; sourceTree = "<group>"; };
+		CC11DD29EE33FF4455660709 /* SessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SessionStore.swift"; sourceTree = "<group>"; };
+		FA11FA22FA33FA44FA55FA66 /* MappingPresets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MappingPresets.swift"; sourceTree = "<group>"; };
+		CC11DD23EE33FF4455660702 /* AppSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppSettings.swift"; sourceTree = "<group>"; };
 		3495D0341DEC44498FDFCD7B /* DataWizard.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = DataWizard.entitlements; sourceTree = "<group>"; };
 		E4428854A1234806B9AD3FEC /* 데이터 마법사.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "데이터 마법사.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -66,6 +72,9 @@
 			AA11BB22CC33DD44EE55FF66 /* MappingPlan.swift */,
 			BB11CC22DD33EE44FF556601 /* Assets.xcassets */,
 			CC11DD22EE33FF4455660701 /* ValueUnify.swift */,
+			CC11DD29EE33FF4455660709 /* SessionStore.swift */,
+			FA11FA22FA33FA44FA55FA66 /* MappingPresets.swift */,
+			CC11DD23EE33FF4455660702 /* AppSettings.swift */,
 			3495D0341DEC44498FDFCD7B /* DataWizard.entitlements */,
 		); path = DataWizard; sourceTree = "<group>"; };
 /* End PBXGroup section */
@@ -104,6 +113,9 @@
 				DBEFAC7536AC42EBB999CC63 /* Exporter.swift in Sources */,
 				AA01BB02CC03DD04EE05FF06 /* MappingPlan.swift in Sources */,
 				CC01DD02EE03FF0405060701 /* ValueUnify.swift in Sources */,
+				CC01DD09EE03FF0405060709 /* SessionStore.swift in Sources */,
+				FA01FA02FA03FA04FA05FA06 /* MappingPresets.swift in Sources */,
+				CC01DD03EE03FF0405060702 /* AppSettings.swift in Sources */,
 			); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
 
