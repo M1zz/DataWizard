@@ -62,7 +62,7 @@ enum ValueScanner {
 
     /// Columns worth a value-unification pass: mapped somewhere, categorical, low-cardinality.
     static func candidates(in plans: [FilePlan]) -> [UnifiedColumn] {
-        UnifiedColumn.allCases.filter { col in
+        ColumnReviewBuilder.universe(in: plans).filter { col in
             guard !freeText.contains(col) else { return false }
             guard plans.contains(where: { $0.isMapped(col) }) else { return false }
             let n = distinct(col, in: plans).count
@@ -84,7 +84,7 @@ enum ColumnReviewKind { case category, phone, date, freeText, derived }
 /// 셋 중 하나로 바꿀 수 있다 (파생 컬럼 제외).
 /// - freeText: 사용자가 적은 값 — 그대로 두되 오타 의심값만 알려준다.
 /// - category: 정해둔 선택지(허용 목록)만 허용 — 벗어난 값은 결정 대상.
-/// - format:   정해둔 형식(전화번호/이메일/생년월일/직접 정규식)에 맞춰야 한다.
+/// - format:   정해둔 형식(FormatPreset 또는 직접 정규식)에 맞춰야 한다.
 enum ColumnType: String, CaseIterable, Identifiable {
     case freeText = "자유 입력"
     case category = "범주"
@@ -101,33 +101,118 @@ enum ColumnType: String, CaseIterable, Identifiable {
         switch self {
         case .freeText: return "사용자가 적은 값 그대로 둡니다. 오타 같아 보이는 값만 알려줘요."
         case .category: return "정해둔 선택지만 허용합니다. 목록을 벗어난 값은 결정 대상으로 표시돼요."
-        case .format:   return "정해둔 형식(전화번호·이메일·생년월일·직접 정규식)에 맞춰야 합니다."
+        case .format:   return "정해둔 형식에 맞춰야 합니다. 전화번호·이메일·날짜·숫자·이름 등 자주 쓰는 형식을 고르거나 정규식을 직접 적을 수 있어요."
         }
     }
 }
 
-/// 포맷 타입 컬럼이 맞춰야 할 형식. custom은 사용자가 직접 정규식을 입력한다.
+/// 포맷 타입 컬럼이 맞춰야 할 형식. 데이터 클렌징에서 반복해서 쓰는 형태들을
+/// 프리셋으로 두고, 없으면 custom으로 정규식을 직접 적는다.
 enum FormatPreset: String, CaseIterable, Identifiable {
-    case phone  = "전화번호"
-    case email  = "이메일"
-    case date   = "생년월일"
-    case custom = "직접 입력"
+    // 연락처
+    case phone      = "전화번호"
+    case email      = "이메일"
+    case url        = "웹 주소"
+    // 날짜
+    case date       = "생년월일"
+    case yearMonth  = "연월"
+    case year       = "연도"
+    // 숫자
+    case integer    = "정수"
+    case decimal    = "소수"
+    case amount     = "금액(콤마)"
+    case percent    = "퍼센트"
+    // 이름·텍스트
+    case koreanName = "한글 이름"
+    case latinName  = "영문 이름"
+    case alnumID    = "영숫자 ID"
+    // 기타
+    case zipCode    = "우편번호"
+    case custom     = "직접 입력"
+
     var id: String { rawValue }
+
+    /// 메뉴에서 묶어 보여줄 갈래 — 프리셋이 늘어나도 고르기 쉽게.
+    enum Group: String, CaseIterable, Identifiable {
+        case contact = "연락처"
+        case date    = "날짜"
+        case number  = "숫자"
+        case text    = "이름·텍스트"
+        case other   = "기타"
+        var id: String { rawValue }
+        var members: [FormatPreset] { FormatPreset.allCases.filter { $0.group == self } }
+    }
+
+    var group: Group {
+        switch self {
+        case .phone, .email, .url:                    return .contact
+        case .date, .yearMonth, .year:                return .date
+        case .integer, .decimal, .amount, .percent:   return .number
+        case .koreanName, .latinName, .alnumID:       return .text
+        case .zipCode, .custom:                       return .other
+        }
+    }
+
     /// 값 전체가 이 정규식에 맞아야 통과 (custom은 사용자 입력을 별도로 씀).
     var pattern: String {
         switch self {
-        case .phone:  return "\\d{2,3}-\\d{3,4}-\\d{4}"
-        case .email:  return "[^@\\s]+@[^@\\s]+\\.[^@\\s]+"
-        case .date:   return "\\d{4}-\\d{2}-\\d{2}"
-        case .custom: return ""
+        case .phone:      return "\\d{2,3}-\\d{3,4}-\\d{4}"
+        case .email:      return "[^@\\s]+@[^@\\s]+\\.[^@\\s]+"
+        case .url:        return "https?://[^\\s]+"
+        case .date:       return "\\d{4}-\\d{2}-\\d{2}"
+        case .yearMonth:  return "\\d{4}-\\d{2}"
+        case .year:       return "(19|20)\\d{2}"
+        case .integer:    return "-?\\d+"
+        case .decimal:    return "-?\\d+(\\.\\d+)?"
+        case .amount:     return "-?\\d{1,3}(,\\d{3})*(\\.\\d+)?"
+        case .percent:    return "\\d{1,3}(\\.\\d+)?%"
+        case .koreanName: return "[가-힣]{2,}"
+        case .latinName:  return "[A-Za-z][A-Za-z .'\\-]*"
+        case .alnumID:    return "[A-Za-z0-9_\\-]+"
+        case .zipCode:    return "\\d{5}"
+        case .custom:     return ""
         }
     }
+
+    /// 이 형식에 맞는 값의 실제 예 — 규칙보다 예가 먼저 눈에 들어온다.
     var hint: String {
         switch self {
-        case .phone:  return "010-XXXX-XXXX"
-        case .email:  return "x@y.z"
-        case .date:   return "yyyy-MM-dd"
-        case .custom: return "정규식 직접 입력"
+        case .phone:      return "010-1234-5678"
+        case .email:      return "name@example.com"
+        case .url:        return "https://example.com"
+        case .date:       return "2001-03-15"
+        case .yearMonth:  return "2025-08"
+        case .year:       return "2001"
+        case .integer:    return "265"
+        case .decimal:    return "88.5"
+        case .amount:     return "1,200,000"
+        case .percent:    return "95%"
+        case .koreanName: return "홍길동"
+        case .latinName:  return "Gil-dong Hong"
+        case .alnumID:    return "A-1024"
+        case .zipCode:    return "06236"
+        case .custom:     return "정규식 직접 입력"
+        }
+    }
+
+    /// 한 줄 설명 — 무엇을 통과시키는지 말로도 알려 준다.
+    var about: String {
+        switch self {
+        case .phone:      return "숫자를 하이픈으로 끊은 국내 전화번호"
+        case .email:      return "@ 앞뒤가 있고 점이 들어간 주소"
+        case .url:        return "http/https로 시작하는 주소"
+        case .date:       return "네 자리 연도-월-일"
+        case .yearMonth:  return "연도-월까지만 (일 없음)"
+        case .year:       return "1900~2099 사이 네 자리 연도"
+        case .integer:    return "소수점 없는 숫자 (음수 허용)"
+        case .decimal:    return "소수점 있는 숫자 (음수 허용)"
+        case .amount:     return "천 단위 콤마가 들어간 금액"
+        case .percent:    return "숫자 뒤에 % 기호"
+        case .koreanName: return "한글만 두 글자 이상"
+        case .latinName:  return "영문·공백·하이픈·아포스트로피"
+        case .alnumID:    return "영문·숫자·하이픈·밑줄로만 된 식별자"
+        case .zipCode:    return "다섯 자리 새 우편번호"
+        case .custom:     return "직접 적은 정규식에 맞는 값"
         }
     }
 }
@@ -180,8 +265,20 @@ enum ColumnReviewBuilder {
     }
 
     /// Columns that will appear in the merged file, in export order.
+    /// 이번 작업이 다룰 수 있는 컬럼 전부 — 아카데미 프리셋 순서를 먼저 두고,
+    /// 프리셋에 없는 파일 고유 컬럼을 뒤에 붙인다. (스키마 고정이 풀렸으므로
+    /// ‘전체 컬럼’은 더 이상 상수가 아니라 이번 파일들에서 계산된다.)
+    static func universe(in plans: [FilePlan]) -> [UnifiedColumn] {
+        var out = UnifiedColumn.academyPreset
+        var seen = Set(out)
+        for plan in plans {
+            for col in plan.sources.keys where seen.insert(col).inserted { out.append(col) }
+        }
+        return out
+    }
+
     static func finalColumns(in plans: [FilePlan]) -> [UnifiedColumn] {
-        UnifiedColumn.allCases.filter { col in
+        universe(in: plans).filter { col in
             switch col {
             case .channel, .dupFlag, .code: return true   // code: 간편지원은 생성됨
             case .phoneClean: return mappedSomewhere(.phone, in: plans)
@@ -193,6 +290,49 @@ enum ColumnReviewBuilder {
     }
 
     private static let isoDate = "^\\d{4}-\\d{2}-\\d{2}$"
+
+    /// 파생 컬럼이 아닌 보통 컬럼 하나의 검토 정보.
+    ///
+    /// 사용자가 타입(자유입력/범주/포맷)을 언제든 바꿀 수 있도록 값 목록·샘플·오타
+    /// 후보를 모두 채워 둔다. 자동 판단 기본값만 kind로 표시하고, 실제 렌더링/검증은
+    /// 사용자가 고른 타입을 따른다.
+    static func genericReview(_ col: UnifiedColumn, in plans: [FilePlan],
+                              categorical: Set<UnifiedColumn>) -> ColumnReview {
+        let d = ValueScanner.distinct(col, in: plans)
+        let isCat = categorical.contains(col)
+        return ColumnReview(column: col,
+                            kind: isCat ? .category : .freeText,
+                            values: d,
+                            samples: d.prefix(5).map { $0.value },
+                            anomalies: AnomalyDetector.scan(d),
+                            note: isCat ? "정해둔 선택지로 값을 통일합니다."
+                                        : "자유 입력 값이라 통일 없이 원본 그대로 저장됩니다.",
+                            distinctCount: d.count,
+                            total: d.reduce(0) { $0 + $1.count })
+    }
+
+    /// 유틸 모드의 컬럼 — 파일 헤더 그대로, 헤더에 적힌 순서대로.
+    /// 병합이 만들어 내던 파생 컬럼(지원방식·중복삭제·(Clean) 등)은 없다.
+    static func plainColumns(in plans: [FilePlan]) -> [UnifiedColumn] {
+        var out: [UnifiedColumn] = []
+        var seen = Set<UnifiedColumn>()
+        for plan in plans {
+            for h in plan.headers {
+                guard let c = UnifiedColumn(rawValue: h), seen.insert(c).inserted else { continue }
+                out.append(c)
+            }
+        }
+        return out
+    }
+
+    /// 유틸 모드의 검토 목록 — 모든 컬럼을 보통 컬럼으로 다룬다.
+    /// 전화번호·날짜 전용 화면이 필요하면 검토 카드에서 타입을 ‘포맷’으로 바꾸면 된다.
+    static func plainReviews(in plans: [FilePlan]) -> [ColumnReview] {
+        let categorical = Set(ValueScanner.candidates(in: plans))
+        return plainColumns(in: plans).map {
+            genericReview($0, in: plans, categorical: categorical)
+        }
+    }
 
     /// One review per final column, in export order.
     static func reviews(in plans: [FilePlan]) -> [ColumnReview] {
@@ -262,20 +402,7 @@ enum ColumnReviewBuilder {
                                     flaggedCount: flaggedValues.count,
                                     distinctCount: Set(raw).count, total: raw.count)
             default:
-                // 사용자가 타입(자유입력/범주/포맷)을 언제든 바꿀 수 있도록, 비파생
-                // 컬럼은 값 목록·샘플·오타 후보를 모두 채워 둔다. 자동 판단 기본값만
-                // kind로 표시하고, 실제 렌더링/검증은 사용자가 고른 타입을 따른다.
-                let d = ValueScanner.distinct(col, in: plans)
-                let isCat = categorical.contains(col)
-                return ColumnReview(column: col,
-                                    kind: isCat ? .category : .freeText,
-                                    values: d,
-                                    samples: d.prefix(5).map { $0.value },
-                                    anomalies: AnomalyDetector.scan(d),
-                                    note: isCat ? "정해둔 선택지로 값을 통일합니다."
-                                                : "자유 입력 값이라 통일 없이 원본 그대로 저장됩니다.",
-                                    distinctCount: d.count,
-                                    total: d.reduce(0) { $0 + $1.count })
+                return genericReview(col, in: plans, categorical: categorical)
             }
         }
     }

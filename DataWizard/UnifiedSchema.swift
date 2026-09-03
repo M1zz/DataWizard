@@ -1,85 +1,188 @@
 import Foundation
 
-/// The unified output schema. Order matters: this is the column order written to
-/// the merged file — it mirrors the hand-made 최종 ‘제출자’ CSV exactly (73 columns),
-/// so the tool's output is drop-in comparable with the existing process.
-enum UnifiedColumn: String, CaseIterable {
-    case code = "Code"
-    case koreanName = "Korean Name"
-    case channel = "지원방식"
-    case dupFlag = "중복삭제"
-    case email = "Email Address"
-    case phoneClean = "전화번호(Clean)"
-    case phone = "Phone Number"
-    // 후속 작업 컬럼 (클렌징 범위 밖 — 자리만 유지)
-    case onTestScore = "온테점수(265)"
-    case fifthApply = "5기 지원여부"
-    case foundationOrigin = "파운데이션 출신"
-    case scoreFrom = "점수 (from 온테점수(265))"
-    case onTestPass = "온테패스"
-    case eventApplicant = "행사 신청자 (포폴챌 포함)"
-    case howHeard = "How did you hear about our program? (Please select one option only.)"
-    case dob = "Date of Birth"
-    case dobClean = "생년월일(Clean)"
-    case campaign = "Campaign"
-    case regCohort = "Registration Cohort"
-    case regBatch = "Registration Batch"
-    case regAcademy = "Registration Academy"
-    case curCohort = "Current Cohort"
-    case curBatch = "Current Batch"
-    case processStatus = "Process Status"
-    case totalActiveChoices = "Total Active Choices"
-    case confirmedAt = "Confirmed At"
-    case blocked = "Blocked"
-    case disabled = "Disabled"
-    case registeredAt = "Registered At"
-    case lastLogin = "Last Login"
-    case deleted = "Deleted"
-    case tncAge = "T&C Age"
-    case tncContact = "T&C Contact"
-    case academyChoice = "Academy Choice"
-    case age = "만 나이"
-    case ageGroup = "Age Group"
-    case gender = "Gender"
-    case idDocType = "ID Document Type"
-    case idNumber = "ID Number / Passport Number"
-    case nationality = "Nationality"
-    case currentCity = "Current City"
-    case cityOverseas = "City(Overseas)"
-    case province = "Province"
-    case country = "Current Country of Residence"
-    case currentAddress = "Current Address"
-    case postalCode = "Current Postal Code"
-    case pohangResidency = "Pohang/Gyeongsangbuk-do Residency and Origin"
-    case placeOfBirth = "Place of Birth"
-    case currentStatus = "Current Status"
-    case schoolCompany = "School/University/Company"
-    case majorDept = "Major/Department"
-    case dualMajor = "이중전공 학과명"
-    case uniStats = "Uni_Stats"
-    case othersSpecify = "Others (Please specify if you chose Others)"
-    case levelOfEducation = "Level of Education"
-    case school = "School/University"
-    case major = "Major"
-    case considerMyself = "Currently, I consider myself as a..."
-    case accomodation = "Accomodation Preference"
-    case sessionPref = "Session Preference Time"
-    case foundationGrad = "Are you a graduate or an expected graduate of the Apple Foundation Program?"
-    case snsChannel = "어떤SNS 였나요?"
-    case coreCompetencies = "Core Competencies"
-    case motivVideo = "Link to Motivational Video"
-    case cvFile = "CV File (*mandatory)"
-    case linkedin = "LinkedIn Profile"
-    case portfolioFile = "Portfolio File (*Mandatory)"
-    case portfolioLinks = "Portfolio Links"
-    case selfIntro = "자기소개 (최대 300자)"
-    case motivation = "지원동기 (최대 800자)"
-    case essayInitiative = "작은 일이라도 스스로 시작하거나 무언가를 바꿔본 경험을 들려주세요.  (최대 500자)"
-    case essayCraft = "결과물의 완성도를 높이기 위해 치열하게 고민했던 과정이 자세하게 드러나면 더 좋아요. (최대 500자)"
-    case essayChallenge = "익숙하지 않은 분야에 도전했거나 협업을 통해 나의 다른 면을 발견한 경험을 들려주세요. (최대 500자)"
-    case submittedAt = "Submitted At"
+/// 컬럼 하나 — 파일 헤더 이름 그 자체.
+///
+/// 예전에는 애플 아카데미 제출자 양식 73컬럼으로 고정된 `enum` 이었다. 이제는 어떤
+/// CSV/XLSX의 어떤 헤더든 컬럼이 될 수 있고, 73컬럼은 `academyPreset` 이라는 ‘자주 쓰는
+/// 순서’로만 남는다. 이름 상수(`.code`, `.email` …)를 그대로 둔 덕분에 아카데미 전용
+/// 로직(채널 매핑·중복 판정·파생 컬럼)은 손대지 않고 계속 동작한다.
+struct UnifiedColumn: Hashable, Identifiable, RawRepresentable, CustomStringConvertible {
+    let rawValue: String
 
-    static var orderedHeaders: [String] { allCases.map { $0.rawValue } }
+    /// 헤더 문자열에서 만든다. 앞뒤 공백은 떼어 같은 컬럼이 둘로 갈라지지 않게 한다.
+    /// 빈 이름은 컬럼이 아니므로 nil — 헤더가 비어 있는 칸을 그냥 건너뛸 수 있다.
+    init?(rawValue: String) {
+        let name = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return nil }
+        self.rawValue = name
+    }
+
+    /// 코드에서 이름을 직접 적을 때 (프리셋 상수용).
+    init(_ name: String) {
+        self.rawValue = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var id: String { rawValue }
+    var description: String { rawValue }
+
+    // MARK: - 애플 아카데미 제출자 양식 (프리셋)
+
+    static let code = UnifiedColumn("Code")
+    static let koreanName = UnifiedColumn("Korean Name")
+    static let channel = UnifiedColumn("지원방식")
+    static let dupFlag = UnifiedColumn("중복삭제")
+    static let email = UnifiedColumn("Email Address")
+    static let phoneClean = UnifiedColumn("전화번호(Clean)")
+    static let phone = UnifiedColumn("Phone Number")
+    static let onTestScore = UnifiedColumn("온테점수(265)")
+    static let fifthApply = UnifiedColumn("5기 지원여부")
+    static let foundationOrigin = UnifiedColumn("파운데이션 출신")
+    static let scoreFrom = UnifiedColumn("점수 (from 온테점수(265))")
+    static let onTestPass = UnifiedColumn("온테패스")
+    static let eventApplicant = UnifiedColumn("행사 신청자 (포폴챌 포함)")
+    static let howHeard = UnifiedColumn("How did you hear about our program? (Please select one option only.)")
+    static let dob = UnifiedColumn("Date of Birth")
+    static let dobClean = UnifiedColumn("생년월일(Clean)")
+    static let campaign = UnifiedColumn("Campaign")
+    static let regCohort = UnifiedColumn("Registration Cohort")
+    static let regBatch = UnifiedColumn("Registration Batch")
+    static let regAcademy = UnifiedColumn("Registration Academy")
+    static let curCohort = UnifiedColumn("Current Cohort")
+    static let curBatch = UnifiedColumn("Current Batch")
+    static let processStatus = UnifiedColumn("Process Status")
+    static let totalActiveChoices = UnifiedColumn("Total Active Choices")
+    static let confirmedAt = UnifiedColumn("Confirmed At")
+    static let blocked = UnifiedColumn("Blocked")
+    static let disabled = UnifiedColumn("Disabled")
+    static let registeredAt = UnifiedColumn("Registered At")
+    static let lastLogin = UnifiedColumn("Last Login")
+    static let deleted = UnifiedColumn("Deleted")
+    static let tncAge = UnifiedColumn("T&C Age")
+    static let tncContact = UnifiedColumn("T&C Contact")
+    static let academyChoice = UnifiedColumn("Academy Choice")
+    static let age = UnifiedColumn("만 나이")
+    static let ageGroup = UnifiedColumn("Age Group")
+    static let gender = UnifiedColumn("Gender")
+    static let idDocType = UnifiedColumn("ID Document Type")
+    static let idNumber = UnifiedColumn("ID Number / Passport Number")
+    static let nationality = UnifiedColumn("Nationality")
+    static let currentCity = UnifiedColumn("Current City")
+    static let cityOverseas = UnifiedColumn("City(Overseas)")
+    static let province = UnifiedColumn("Province")
+    static let country = UnifiedColumn("Current Country of Residence")
+    static let currentAddress = UnifiedColumn("Current Address")
+    static let postalCode = UnifiedColumn("Current Postal Code")
+    static let pohangResidency = UnifiedColumn("Pohang/Gyeongsangbuk-do Residency and Origin")
+    static let placeOfBirth = UnifiedColumn("Place of Birth")
+    static let currentStatus = UnifiedColumn("Current Status")
+    static let schoolCompany = UnifiedColumn("School/University/Company")
+    static let majorDept = UnifiedColumn("Major/Department")
+    static let dualMajor = UnifiedColumn("이중전공 학과명")
+    static let uniStats = UnifiedColumn("Uni_Stats")
+    static let othersSpecify = UnifiedColumn("Others (Please specify if you chose Others)")
+    static let levelOfEducation = UnifiedColumn("Level of Education")
+    static let school = UnifiedColumn("School/University")
+    static let major = UnifiedColumn("Major")
+    static let considerMyself = UnifiedColumn("Currently, I consider myself as a...")
+    static let accomodation = UnifiedColumn("Accomodation Preference")
+    static let sessionPref = UnifiedColumn("Session Preference Time")
+    static let foundationGrad = UnifiedColumn("Are you a graduate or an expected graduate of the Apple Foundation Program?")
+    static let snsChannel = UnifiedColumn("어떤SNS 였나요?")
+    static let coreCompetencies = UnifiedColumn("Core Competencies")
+    static let motivVideo = UnifiedColumn("Link to Motivational Video")
+    static let cvFile = UnifiedColumn("CV File (*mandatory)")
+    static let linkedin = UnifiedColumn("LinkedIn Profile")
+    static let portfolioFile = UnifiedColumn("Portfolio File (*Mandatory)")
+    static let portfolioLinks = UnifiedColumn("Portfolio Links")
+    static let selfIntro = UnifiedColumn("자기소개 (최대 300자)")
+    static let motivation = UnifiedColumn("지원동기 (최대 800자)")
+    static let essayInitiative = UnifiedColumn("작은 일이라도 스스로 시작하거나 무언가를 바꿔본 경험을 들려주세요.  (최대 500자)")
+    static let essayCraft = UnifiedColumn("결과물의 완성도를 높이기 위해 치열하게 고민했던 과정이 자세하게 드러나면 더 좋아요. (최대 500자)")
+    static let essayChallenge = UnifiedColumn("익숙하지 않은 분야에 도전했거나 협업을 통해 나의 다른 면을 발견한 경험을 들려주세요. (최대 500자)")
+    static let submittedAt = UnifiedColumn("Submitted At")
+
+    /// 아카데미 통합본의 컬럼과 그 순서. 이 순서가 곧 내보내기 순서였다.
+    /// 이제는 ‘고정 스키마’가 아니라 골라 쓸 수 있는 하나의 프리셋이다.
+    static let academyPreset: [UnifiedColumn] = [
+        .code,
+        .koreanName,
+        .channel,
+        .dupFlag,
+        .email,
+        .phoneClean,
+        .phone,
+        .onTestScore,
+        .fifthApply,
+        .foundationOrigin,
+        .scoreFrom,
+        .onTestPass,
+        .eventApplicant,
+        .howHeard,
+        .dob,
+        .dobClean,
+        .campaign,
+        .regCohort,
+        .regBatch,
+        .regAcademy,
+        .curCohort,
+        .curBatch,
+        .processStatus,
+        .totalActiveChoices,
+        .confirmedAt,
+        .blocked,
+        .disabled,
+        .registeredAt,
+        .lastLogin,
+        .deleted,
+        .tncAge,
+        .tncContact,
+        .academyChoice,
+        .age,
+        .ageGroup,
+        .gender,
+        .idDocType,
+        .idNumber,
+        .nationality,
+        .currentCity,
+        .cityOverseas,
+        .province,
+        .country,
+        .currentAddress,
+        .postalCode,
+        .pohangResidency,
+        .placeOfBirth,
+        .currentStatus,
+        .schoolCompany,
+        .majorDept,
+        .dualMajor,
+        .uniStats,
+        .othersSpecify,
+        .levelOfEducation,
+        .school,
+        .major,
+        .considerMyself,
+        .accomodation,
+        .sessionPref,
+        .foundationGrad,
+        .snsChannel,
+        .coreCompetencies,
+        .motivVideo,
+        .cvFile,
+        .linkedin,
+        .portfolioFile,
+        .portfolioLinks,
+        .selfIntro,
+        .motivation,
+        .essayInitiative,
+        .essayCraft,
+        .essayChallenge,
+        .submittedAt
+    ]
+
+    /// 병합이 직접 계산해 채우는 컬럼 — 원본 파일에서 읽어 오지 않는다.
+    static let academyDerived: Set<UnifiedColumn> = [
+        .channel, .dupFlag, .phoneClean, .dobClean, .age, .ageGroup
+    ]
 }
 
 /// One normalized applicant row, keyed by unified column.

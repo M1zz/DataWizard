@@ -14,8 +14,9 @@ struct DataWizardApp: App {
         }
         .windowResizability(.contentSize)
 
-        // 합쳐진 파일 미리보기 — 검토 중 옆에 두고 보는 별도 윈도우.
-        Window("합쳐진 파일 미리보기", id: "preview") {
+        // 완성본 미리보기 — 작업 중 옆에 두고 보는 별도 윈도우.
+        // 앱을 켤 때는 뜨지 않는다 (창이 복원돼도 스스로 닫는다 — PreviewWindowView.onAppear).
+        Window("완성본 미리보기", id: "preview") {
             PreviewWindowView()
                 .dynamicTypeSize(fontSize.dynamicTypeSize)
         }

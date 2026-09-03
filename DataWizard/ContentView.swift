@@ -8,22 +8,19 @@ final class SaveDebouncer {
 }
 
 struct ContentView: View {
-    enum Stage { case files, columns, review, result }
-    /// 검토 화면의 두 보기: 결정할 일만(todo) vs 전체 컬럼(all).
-    enum ReviewTab: String, CaseIterable, Identifiable {
-        case todo = "결정 TODO"
-        case all  = "전체 컬럼"
-        var id: String { rawValue }
-    }
+    /// work  = 유틸 모드: 고칠 파일 + 고칠 컬럼, 두 개만 물어보고 바로 작업 (기본)
+    /// files~ = 여러 파일을 아카데미 통합본으로 합치는 흐름 (필요할 때만)
+    enum Stage { case work, files, columns, focus, review, result }
     /// 컬럼 고르기 진입 시 첫 갈림길의 선택 결과.
-    /// nil = 아직 안 고름(갈림길 화면), withTemplate = 기존 통합본에 맞춰 채우기,
-    /// fromScratch = 남길 컬럼을 직접 골라 새 틀 만들기.
-    enum ColumnMode { case withTemplate, fromScratch }
+    /// nil = 아직 안 고름(갈림길 화면),
+    /// patchBase   = 기존 통합본을 그대로 두고 이번에 고른 컬럼 값만 덮어쓰기(부분 정제),
+    /// withTemplate = 기존 통합본의 컬럼 구성만 빌려 이번 데이터로 전부 새로 채우기,
+    /// fromScratch  = 남길 컬럼을 직접 골라 새 틀 만들기.
+    enum ColumnMode: String { case patchBase, withTemplate, fromScratch }
 
     @State private var inputs: [MergeInput] = []
     @State private var plans: [FilePlan] = []
-    @State private var stage: Stage = .files
-    @State private var reviewTab: ReviewTab = .todo
+    @State private var stage: Stage = .work
     // 컬럼 고르기 단계의 갈림길 선택 (nil이면 갈림길 화면을 먼저 보여줌).
     @State private var columnMode: ColumnMode?
 
@@ -48,14 +45,59 @@ struct ContentView: View {
     @State private var referenceName: String?
     @State private var referenceColumns: Set<UnifiedColumn> = []   // 참조에서 인식된 컬럼
     @State private var referenceUnmatched: [String] = []           // 스키마에 없던 헤더
+    // ---- 부분 정제: 기존에 만들던 통합본에 이번 컬럼만 이어붙이기 ----
+    // 값까지 통째로 들고 있는 기준 파일. 있으면 결과물은 이 파일의 컬럼 구성·값을
+    // 그대로 유지한 채, focusColumns 만 새로 정제한 값으로 바뀐다.
+    @State private var base: BaseSheet?
+    /// `base`가 사용자가 따로 불러온 ‘만들던 통합본’인가.
+    /// false면 올린 파일들을 그대로 이어 붙인 시트라, 행 번호로 짝지으면 된다.
+    @State private var baseIsUserFile = false
+    /// 기준 통합본과 이번 데이터를 무엇으로 짝지을지. nil이면 Code→전화→이메일 자동.
+    @State private var matchColumn: UnifiedColumn?
+    @State private var focusColumns: Set<UnifiedColumn> = []
+    /// 첫 화면에서 이미 정리된(손볼 거리 없는) 컬럼까지 펼쳐 보여줄지.
+    /// 기본은 접힘 — 시작할 땐 손볼 컬럼만 눈에 들어오게.
+    @State private var showSettledColumns = false
+    /// 전체 컬럼 체크 목록을 펼쳤는가. 기본은 접힘 — 한 번에 하나씩 제안한다.
+    @State private var showAllColumns = false
+    /// 지금 제안하고 있는 컬럼의 순서 (할 일이 적은 것부터).
+    @State private var proposalIndex = 0
+    /// 손댈 것 없는 컬럼 중 자동으로 다듬을 수 있는 것도 결과에 채울지.
+    @State private var autoFillSettled = true
+    /// ‘그대로 완성되는 컬럼’ 이름을 모두 펼쳐 볼지.
+    @State private var showSettledSummary = false
+    @State private var patch: PatchResult?
+    @State private var appendNewRows = true
+    @State private var markNewRows = true
+
+    // 검토 화면의 컬럼 목록 순서 — 손볼 거리 있는 컬럼이 위.
+    // 검토에 들어올 때 한 번 고정한다 (고치는 동안 줄이 튀지 않게).
+    @State private var stepOrder: [UnifiedColumn] = []
+    /// 지금 자세히 보고 있는 컬럼. nil이면 목록 화면.
+    @State private var openColumn: UnifiedColumn?
+
     @State private var detailColumn: UnifiedColumn?
     @State private var configColumn: UnifiedColumn?
+    @State private var exampleColumn: UnifiedColumn?
     @State private var regexColumn: UnifiedColumn?
     @State private var mappingColumn: UnifiedColumn?
 
     @State private var result: MergeResult?
     @State private var errorMessage: String?
     @State private var excludeRemoved = false
+    @State private var isDropTargeted = false
+    @State private var isBaseDropTargeted = false
+    // 틀(사용자가 고른 통합본)의 컬럼별 값 목록 — ‘완성될 파일 기준’ 판정에 쓴다.
+    // 매번 훑지 않도록 틀을 잡을 때 한 번 만들어 둔다.
+    @State private var baseValues: [UnifiedColumn: [String]] = [:]
+    /// 그중 ‘정해진 값이 반복되는’ 컬럼 — 값 목록을 정답지로 쓸 수 있는 컬럼.
+    @State private var baseCategorical: Set<UnifiedColumn> = []
+    // 이름이 다른 같은 컬럼 제안 (틀의 값 ↔ 이번 값 패턴 매칭).
+    @State private var matchSuggestions: [ColumnMatcher.Suggestion] = []
+    @State private var matchSamples: [UnifiedColumn: [String]] = [:]
+    @State private var showMatchSheet = false
+    /// 같은 이름인데 파일마다 값 모양이 크게 다른 컬럼 (합친 뒤 정리 대상).
+    @State private var shapeConflicts: [UnifiedColumn] = []
     @State private var isPreparing = false
     @State private var isRunning = false
 
@@ -75,8 +117,10 @@ struct ContentView: View {
     var body: some View {
         Group {
             switch stage {
+            case .work:    workStage
             case .files:   filesStage
             case .columns: columnsStage
+            case .focus:   focusStage
             case .review:  reviewStage
             case .result:  resultStage
             }
@@ -86,6 +130,12 @@ struct ContentView: View {
         .sheet(item: $detailColumn) { col in detailSheet(col) }
         .sheet(item: $configColumn) { col in
             ColumnSourceSheet(column: col, plans: $plans, onClose: { configColumn = nil })
+        }
+        .sheet(item: $exampleColumn) { col in
+            ExampleRuleSheet(column: col,
+                             values: ValueScanner.distinct(col, in: plans),
+                             mapping: bindingForColumn(col),
+                             onClose: { exampleColumn = nil })
         }
         .sheet(item: $regexColumn) { col in
             // Cleanup is value-based, so aggregate across files (one row per value).
@@ -102,8 +152,21 @@ struct ContentView: View {
                                                set: { allowedValues[col] = $0 }),
                               onClose: { mappingColumn = nil })
         }
+        .sheet(isPresented: $showMatchSheet) {
+            ColumnMatchSheet(baseName: base?.name ?? "",
+                             suggestions: matchSuggestions,
+                             sourceSamples: matchSamples,
+                             targetSamples: matchSamples,
+                             onApply: { pairs in
+                                 showMatchSheet = false
+                                 applyMatches(pairs)
+                             },
+                             onClose: { showMatchSheet = false })
+        }
         // 이전 세션이 있으면 파일 화면에서 이어서 하기를 제안.
         .onAppear { if resumable == nil { resumable = SessionStore.load() } }
+        // 완성본 미리보기 창에서 누른 동작을 여기서 실제로 수행한다.
+        .onChange(of: preview.request) { req in handlePreviewRequest(req) }
         // 작업 상태가 바뀔 때마다 (debounce) 자동 저장 — 언제 멈춰도 이어서 가능.
         .onChange(of: valueMap) { _ in scheduleSave() }
         .onChange(of: allowedValues) { _ in scheduleSave() }
@@ -114,6 +177,7 @@ struct ContentView: View {
         .onChange(of: includedColumns) { _ in scheduleSave() }
         .onChange(of: phoneTemplate) { _ in scheduleSave() }
         .onChange(of: referenceName) { _ in scheduleSave() }
+        .onChange(of: focusColumns) { _ in scheduleSave() }
         .onChange(of: stage) { _ in scheduleSave() }
         // 창을 내리거나 앱을 벗어나는 순간 즉시 저장.
         .onChange(of: scenePhase) { phase in if phase != .active { saveNow() } }
@@ -136,6 +200,1244 @@ struct ContentView: View {
                                 onClose: { detailColumn = nil })
     }
 
+    // MARK: - Stage 0: 합칠 파일 올리기 + 고칠 컬럼 고르기
+
+    /// 앱을 열면 바로 이 화면. 단계를 밟게 하지 않고 두 가지만 묻는다:
+    /// 합칠 파일들과, 그중 지금 고칠 컬럼. 나머지는 전부 그대로 이어 붙여 돌려준다.
+    @ViewBuilder
+    private var workStage: some View {
+        Group {
+            if plans.isEmpty || !isUtility {
+                workDropView
+            } else {
+                VStack(spacing: 0) {
+                    workToolbar
+                    Divider()
+                    workFileStrip
+                    Divider()
+                    workColumnBar
+                    Divider()
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 10) {
+                            workMergeCard
+                            workPreviewCard
+                            workProposalCard
+                            workSettledSummary
+                            workListDisclosure
+                            if showAllColumns { workColumnListBody }
+                        }
+                        .padding(24)
+                    }
+                }
+                .overlay { if isDropTargeted { dropOverlay("여기에 놓으면 파일이 더해집니다") } }
+            }
+        }
+        .onDrop(of: [.fileURL], isTargeted: $isDropTargeted, perform: acceptDroppedFiles)
+    }
+
+    private func dropOverlay(_ title: String) -> some View {
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .fill(Color.accentColor.opacity(0.08))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.accentColor, lineWidth: 2))
+            .overlay(Label(title, systemImage: "arrow.down.doc.fill")
+                .font(.title2.weight(.semibold))
+                .padding(16)
+                .background(.regularMaterial, in: Capsule()))
+            .padding(8)
+            .allowsHitTesting(false)
+    }
+
+    private var workToolbar: some View {
+        let rows = plans.reduce(0) { $0 + $1.rows.count }
+        return HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(plans.count == 1 ? "파일 1개 · \(rows)행"
+                                      : "파일 \(plans.count)개 · 합쳐서 \(rows)행")
+                    .font(.title3.weight(.bold))
+                Text("컬럼 \(finalColumns.count)개 — 같은 이름의 컬럼끼리 자동으로 맞춰집니다. 고르지 않은 컬럼은 손대지 않아요.")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if baseIsUserFile, let sheet = base {
+                    Text(baseCoverageLine(sheet))
+                        .font(.caption).foregroundStyle(Color.accentColor)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer()
+            if let errorMessage { errorLabel(errorMessage).frame(maxWidth: 240) }
+            Button {
+                openPreviewWindow()
+            } label: {
+                Label("완성본 미리보기", systemImage: "macwindow.badge.plus")
+            }
+            .help("지금 합쳐진 결과를 큰 창으로 봅니다. 파일 색·컬럼 상태가 그대로 보여요.")
+            Button("파일 더 넣기…") { pickWorkFiles() }
+            Button {
+                // 고른 게 없으면 막지 않는다 — 손 안 대고 그대로 뽑는 것도 정상적인 결과.
+                if focusColumns.isEmpty { runMerge() } else { startWork() }
+            } label: {
+                HStack {
+                    if isRunning { ProgressView().controlSize(.small) }
+                    Text(focusColumns.isEmpty
+                         ? "손 안 대고 그대로 가져가기 →"
+                         : (focusColumns.count == 1 ? "고치러 가기 →"
+                                                    : "고른 \(focusColumns.count)개 고치러 가기 →"))
+                        .fontWeight(.semibold)
+                }
+            }
+            .controlSize(.large)
+            .buttonStyle(.borderedProminent)
+            .disabled(isRunning)
+            .help(focusColumns.isEmpty
+                  ? "고른 컬럼 없이 지금 상태 그대로 합쳐 내보냅니다. 다듬을 수 있는 컬럼은 규칙대로 채워집니다."
+                  : "고른 컬럼만 검토하고, 나머지는 올린 그대로 이어 붙입니다.")
+        }
+        .padding(20)
+    }
+
+    /// 올린 파일 목록 — 각 파일이 몇 행·몇 컬럼인지, 빼기 버튼.
+    private var workFileStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(Array(plans.enumerated()), id: \.element.id) { idx, plan in
+                    HStack(spacing: 8) {
+                        Image(systemName: "doc.text.fill")
+                            .foregroundStyle(fileTint(idx))
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(plan.fileName)
+                                .font(.callout.weight(.medium))
+                                .lineLimit(1).truncationMode(.middle)
+                                .help(plan.url.path)
+                            Text("\(plan.rows.count)행 · \(plan.headers.count)컬럼")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Button {
+                            removeWorkFile(plan)
+                        } label: {
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.borderless)
+                        .help("이 파일 빼기")
+                    }
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .frame(maxWidth: 280)
+                    .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color(nsColor: .controlBackgroundColor)))
+                    .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(Color.primary.opacity(0.08), lineWidth: 1))
+                }
+                Button(action: pickWorkFiles) {
+                    Label("파일 추가", systemImage: "plus")
+                        .padding(.horizontal, 6).padding(.vertical, 10)
+                }
+                .buttonStyle(.bordered)
+            }
+            .padding(.horizontal, 24).padding(.vertical, 10)
+        }
+    }
+
+    private var workColumnBar: some View {
+        HStack(spacing: 10) {
+            Text("어떤 컬럼을 고칠까요?").font(.headline)
+            Text("선택 \(focusColumns.count) / \(finalColumns.count)")
+                .font(.subheadline).monospacedDigit().foregroundStyle(.secondary)
+            Spacer()
+            if baseIsUserFile, let base {
+                Label("기준: \(base.name)", systemImage: "arrow.trianglehead.merge")
+                    .font(.caption).foregroundStyle(Color.accentColor)
+                    .lineLimit(1).truncationMode(.middle)
+                Picker("짝짓기", selection: $matchColumn) {
+                    Text("자동 (Code·전화·이메일)").tag(UnifiedColumn?.none)
+                    ForEach(matchColumnChoices) { c in
+                        Text(c.rawValue).tag(UnifiedColumn?.some(c))
+                    }
+                }
+                .frame(maxWidth: 220)
+                .help("기준 파일의 어느 행이 이번 데이터의 어느 행과 같은 대상인지 가릴 컬럼입니다. 사번·주문번호처럼 행마다 고유한 값이 좋아요.")
+                Button("해제") { clearUserBase() }
+                    .controlSize(.small)
+            } else {
+                Button("만들던 통합본에 이어붙이기…") { chooseBase() }
+                    .controlSize(.small)
+                    .help("이미 만들어 둔 통합본이 있으면 그 파일을 기준으로, 고른 컬럼 값만 덮어씁니다.")
+            }
+            if showAllColumns {
+            Divider().frame(height: 16)
+            Button("손볼 거리 있는 것만") {
+                focusColumns = unresolvedColumns
+                showSettledColumns = false
+            }
+                .disabled(unresolvedColumns.isEmpty)
+                .help("오타 의심값·형식이 어긋난 값이 남아 있는 컬럼만 고릅니다.")
+            Button("전체 선택") {
+                focusColumns = Set(finalColumns)
+                showSettledColumns = true      // 고른 걸 숨겨 두지 않는다
+            }
+            Button("전체 해제") { focusColumns = [] }
+            }
+        }
+        .controlSize(.regular)
+        .padding(.horizontal, 24).padding(.vertical, 12)
+    }
+
+    // MARK: 하나씩 제안하기
+
+    /// 손볼 거리가 있는 컬럼을 **일이 적은 순서**로. 금방 끝나는 것부터 하나씩 권한다.
+    private var proposalOrder: [UnifiedColumn] {
+        let scored: [(col: UnifiedColumn, work: Int)] = finalColumns.compactMap { col in
+            guard let r = reviewFor(col), r.kind != .derived else { return nil }
+            let gap = templateGap(r)
+            let work = openCount(r) + gap.outside + (gap.isNew ? 1 : 0)
+            return work > 0 ? (col, work) : nil
+        }
+        return scored.enumerated()
+            .sorted { ($0.element.work, $0.offset) < ($1.element.work, $1.offset) }
+            .map { $0.element.col }
+    }
+
+    /// 아직 손봐야 하는 값들 — `openCount`와 같은 기준, 값 자체가 필요할 때.
+    private func openValues(_ review: ColumnReview) -> Set<String> {
+        let map = valueMap[review.column] ?? [:]
+        switch effectiveType(review) {
+        case .format:
+            if usesProposalUI(review) {
+                return Set(review.proposals
+                    .filter { !$0.standard && (map[$0.value] ?? $0.value) == $0.value }
+                    .map(\.value))
+            }
+            return Set(formatFailures(review).map(\.value))
+        case .category:
+            guard let allowed = allowedValues[review.column], !allowed.isEmpty else { return [] }
+            return Set(review.values.filter { !allowed.contains(map[$0.value] ?? $0.value) }.map(\.value))
+        case .freeText:
+            return Set(review.anomalies.filter { (map[$0.value] ?? $0.value) == $0.value }.map(\.value))
+        }
+    }
+
+    /// 이 컬럼이 표에서 어디에 붙어 있는지 보여 줄 이웃들 —
+    /// 앞뒤 컬럼을 그대로 보여 주고, 행을 알아볼 식별 컬럼(Code·이름)을 맨 앞에 덧붙인다.
+    private func neighborColumns(_ col: UnifiedColumn) -> [UnifiedColumn] {
+        guard let i = finalColumns.firstIndex(of: col) else { return [col] }
+        var out = Array(finalColumns[max(0, i - 2)...min(finalColumns.count - 1, i + 2)])
+        let ids = [UnifiedColumn.code, .koreanName, .email]
+        if let id = ids.first(where: { finalColumns.contains($0) && !out.contains($0) }) {
+            out.insert(id, at: 0)
+        }
+        return out
+    }
+
+    /// “전체 14개 컬럼 중 5번째 · 7월.csv·8월.csv에 있음”
+    private func columnPlaceNote(_ col: UnifiedColumn) -> String {
+        let pos = (finalColumns.firstIndex(of: col).map { $0 + 1 }) ?? 0
+        let owners = plans.enumerated().filter { $0.element.isMapped(col) }
+        let names = owners.map { $0.element.fileName }.joined(separator: " · ")
+        var line = "합쳐진 표의 \(pos)번째 컬럼"
+        if plans.count > 1 { line += " · \(owners.count)/\(plans.count) 파일에 있음 (\(names))" }
+        return line
+    }
+
+    /// 제안 카드 안의 미니 미리보기 — 합쳐진 표에서 이 컬럼이 어떻게 보이는지,
+    /// 손볼 값이 있는 줄을 먼저 골라 파일 색과 함께 보여 준다.
+    /// 손볼 값이 있는 줄을 먼저, 그다음 멀쩡한 줄 — 파일도 골고루.
+    private func proposalSampleRows(_ col: UnifiedColumn,
+                                    flagged: Set<String>) -> [(file: Int, row: [String: String])] {
+        var hits: [(file: Int, row: [String: String])] = []
+        var rest: [(file: Int, row: [String: String])] = []
+        for (i, plan) in plans.enumerated() where plan.isMapped(col) {
+            for row in plan.rows.prefix(200) {
+                let v = plan.compose(col, from: row)
+                guard !v.isEmpty else { continue }
+                if flagged.contains(v) {
+                    if hits.count < 4 { hits.append((i, row)) }
+                } else if rest.count < 4 {
+                    rest.append((i, row))
+                }
+                if hits.count >= 4 && rest.count >= 4 { break }
+            }
+        }
+        return Array((hits + rest).prefix(5))
+    }
+
+    @ViewBuilder
+    private func proposalPreview(_ review: ColumnReview) -> some View {
+        let col = review.column
+        let flagged = openValues(review)
+        let shown = neighborColumns(col)
+        let rows = proposalSampleRows(col, flagged: flagged)
+        if !rows.isEmpty {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 0) {
+                    Text("파일")
+                        .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                        .frame(width: 96, alignment: .leading)
+                        .padding(.horizontal, 8).padding(.vertical, 5)
+                    ForEach(shown) { c in
+                        let here = (c == col)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(c.rawValue)
+                                .font(.caption2.weight(here ? .bold : .semibold))
+                                .foregroundStyle(here ? Color.accentColor : .secondary)
+                                .lineLimit(1).truncationMode(.tail)
+                            if here {
+                                Text("지금 볼 컬럼")
+                                    .font(.caption2).foregroundStyle(Color.accentColor)
+                            }
+                        }
+                        .frame(width: here ? 170 : 110, alignment: .leading)
+                        .padding(.horizontal, 8).padding(.vertical, 5)
+                        .background(here ? Color.accentColor.opacity(0.16) : .clear)
+                        .overlay(alignment: .leading) { proposalEdge(here) }
+                        .overlay(alignment: .trailing) { proposalEdge(here) }
+                    }
+                }
+                .background(Color.primary.opacity(0.04))
+                ForEach(rows.indices, id: \.self) { i in
+                    let item = rows[i]
+                    let plan = plans[item.file]
+                    HStack(spacing: 0) {
+                        HStack(spacing: 5) {
+                            RoundedRectangle(cornerRadius: 2).fill(fileTint(item.file))
+                                .frame(width: 3, height: 12)
+                            Text(plan.fileName)
+                                .font(.caption2).foregroundStyle(fileTint(item.file))
+                                .lineLimit(1).truncationMode(.middle)
+                        }
+                        .frame(width: 96, alignment: .leading)
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        ForEach(shown) { c in
+                            let here = (c == col)
+                            let value = plan.isMapped(c) ? plan.compose(c, from: item.row) : ""
+                            let bad = here && flagged.contains(value)
+                            HStack(spacing: 4) {
+                                Text(value.isEmpty ? "—" : value)
+                                    .font(.caption.weight(bad ? .semibold : .regular))
+                                    .foregroundStyle(bad ? Color.orange
+                                                     : (value.isEmpty ? Color.secondary.opacity(0.5)
+                                                        : (here ? .primary : .secondary)))
+                                    .lineLimit(1).truncationMode(.tail)
+                                if bad {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .font(.caption2).foregroundStyle(.orange)
+                                }
+                            }
+                            .frame(width: here ? 170 : 110, alignment: .leading)
+                            .padding(.horizontal, 8).padding(.vertical, 4)
+                            .background(here ? Color.accentColor.opacity(0.10) : .clear)
+                            .overlay(alignment: .leading) { proposalEdge(here) }
+                            .overlay(alignment: .trailing) { proposalEdge(here) }
+                            .help(value)
+                        }
+                    }
+                    .background(fileTint(item.file).opacity(0.08))
+                }
+            }
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color(nsColor: .textBackgroundColor)))
+            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1))
+        }
+    }
+
+    /// 지금 보는 컬럼의 좌우 세로선 — 표를 관통하는 기둥으로 읽히게.
+    @ViewBuilder
+    private func proposalEdge(_ on: Bool) -> some View {
+        if on { Rectangle().fill(Color.accentColor).frame(width: 2) }
+    }
+
+    /// “이 컬럼부터 할까요?” — 한 번에 한 장.
+    @ViewBuilder
+    private var workProposalCard: some View {
+        let order = proposalOrder
+        if order.isEmpty {
+            workAllSettledCard
+        } else {
+            let i = min(max(proposalIndex, 0), order.count - 1)
+            let col = order[i]
+            let review = reviewFor(col)
+            let status = focusStatus(col)
+            let picked = focusColumns.contains(col)
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text((plans.count > 1 || baseIsUserFile ? "2. 정리 — " : "") + "이 컬럼부터 할까요?")
+                        .font(.title3.weight(.bold))
+                    Spacer()
+                    Text("손볼 컬럼 \(order.count)개 · 제안 \(i + 1)번째")
+                        .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        Text(col.rawValue)
+                            .font(.system(.title2, design: .rounded).weight(.bold))
+                            .lineLimit(1).truncationMode(.tail)
+                        if i == 0 {
+                            Text("가장 빨리 끝나요")
+                                .font(.caption2.weight(.semibold)).foregroundStyle(.green)
+                                .padding(.horizontal, 8).padding(.vertical, 3)
+                                .background(Capsule().fill(Color.green.opacity(0.14)))
+                        }
+                        if picked {
+                            Text("이미 고름")
+                                .font(.caption2.weight(.semibold)).foregroundStyle(Color.accentColor)
+                                .padding(.horizontal, 8).padding(.vertical, 3)
+                                .background(Capsule().fill(Color.accentColor.opacity(0.14)))
+                        }
+                    }
+                    Text(status.text)
+                        .font(.callout).foregroundStyle(.secondary)
+                    if let review {
+                        Text("합쳐진 표에서는 이렇게 보여요 — " + columnPlaceNote(col))
+                            .font(.caption2).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            proposalPreview(review)
+                        }
+                    }
+                }
+                HStack(spacing: 10) {
+                    Button {
+                        focusColumns = [col]
+                        startWork()
+                    } label: {
+                        Text("이것부터 고치기 →").fontWeight(.semibold)
+                    }
+                    .controlSize(.large)
+                    .buttonStyle(.borderedProminent)
+                    Button(picked ? "이번 목록에서 빼기" : "이번에 같이 고치기") {
+                        if picked { focusColumns.remove(col) } else { focusColumns.insert(col) }
+                    }
+                    Spacer()
+                    Button("다음 제안 →") {
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            proposalIndex = (i + 1) % order.count
+                        }
+                    }
+                    .disabled(order.count < 2)
+                }
+            }
+            .padding(18)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.accentColor.opacity(0.06)))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.accentColor.opacity(0.25), lineWidth: 1))
+        }
+    }
+
+    /// 손댈 게 없어 이번에 고르지 않아도 결과에 그대로 완성되는 컬럼들.
+    private var settledColumns: [UnifiedColumn] {
+        finalColumns.filter { col in
+            guard let r = reviewFor(col), r.kind != .derived else { return false }
+            return !focusStatus(col).warn && !focusColumns.contains(col)
+        }
+    }
+
+    /// 그중 사람 판단 없이 값을 다듬을 수 있는 컬럼 — 이미 정해진 통일 규칙이 있는 것들.
+    private var autoEditableColumns: [UnifiedColumn] {
+        settledColumns.filter { col in
+            (valueMap[col] ?? [:]).contains { $0.key != $0.value }
+        }
+    }
+
+    /// “이건 안 골라도 알아서 완성됩니다” — 고르지 않은 컬럼이 사라지는 게 아님을 보여 준다.
+    @ViewBuilder
+    private var workSettledSummary: some View {
+        let settled = settledColumns
+        if !settled.isEmpty {
+            let auto = autoEditableColumns
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: "checkmark.seal.fill").foregroundStyle(.green)
+                    Text("손댈 것 없이 완성되는 컬럼 \(settled.count)개")
+                        .font(.callout.weight(.semibold))
+                    Spacer()
+                    Button(showSettledSummary ? "접기" : "모두 보기") {
+                        withAnimation(.easeInOut(duration: 0.18)) { showSettledSummary.toggle() }
+                    }
+                    .controlSize(.small)
+                }
+                Text((showSettledSummary ? settled : Array(settled.prefix(6)))
+                        .map(\.rawValue).joined(separator: " · ")
+                     + (showSettledSummary || settled.count <= 6 ? "" : " … 외 \(settled.count - 6)개"))
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("고르지 않아도 결과 파일에 그대로 들어갑니다 — 값도 원본 그대로예요.")
+                    .font(.caption2).foregroundStyle(.secondary)
+                if !auto.isEmpty {
+                    Toggle(isOn: $autoFillSettled) {
+                        Text("이 중 \(auto.count)개는 정해 둔 규칙대로 다듬어서 채우기 (\(auto.prefix(3).map(\.rawValue).joined(separator: " · "))\(auto.count > 3 ? " 외" : ""))")
+                            .font(.caption)
+                    }
+                    .toggleStyle(.checkbox)
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.green.opacity(0.07)))
+        }
+    }
+
+    /// 전체 컬럼 체크 목록은 접어 둔다 — 필요할 때만 편다.
+    private var workListDisclosure: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.18)) { showAllColumns.toggle() }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: showAllColumns ? "chevron.down" : "chevron.right")
+                    .font(.caption.weight(.bold))
+                Text(showAllColumns
+                     ? "목록 접기"
+                     : "전체 컬럼 목록에서 직접 고르기 (\(finalColumns.count)개)")
+                if !showAllColumns, !focusColumns.isEmpty {
+                    Text("\(focusColumns.count)개 고름")
+                        .font(.caption2.weight(.semibold))
+                        .padding(.horizontal, 7).padding(.vertical, 2)
+                        .background(Capsule().fill(Color.accentColor.opacity(0.14)))
+                        .foregroundStyle(Color.accentColor)
+                }
+                Spacer()
+            }
+            .font(.callout).foregroundStyle(.secondary)
+            .padding(.horizontal, 6).padding(.vertical, 10)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// 손볼 거리가 남은 컬럼 / 이미 정리된 컬럼으로 한 번에 가른다.
+    /// (focusStatus 는 컬럼마다 값을 훑으므로 목록마다 다시 계산하지 않는다.)
+    private var workColumnSplit: (todo: [UnifiedColumn], settled: [UnifiedColumn]) {
+        var todo: [UnifiedColumn] = [], settled: [UnifiedColumn] = []
+        for col in finalColumns {
+            if focusStatus(col).warn { todo.append(col) } else { settled.append(col) }
+        }
+        return (todo, settled)
+    }
+
+    /// 컬럼 목록 — 손볼 거리가 있는 것만 펼쳐 두고, 이미 정리된 컬럼은 접어 둔다.
+    /// 시작할 때 눈에 들어오는 건 오늘 할 일뿐이어야 한다.
+    private var workColumnListBody: some View {
+        let split = workColumnSplit
+        let hiddenPicked = split.settled.filter(focusColumns.contains).count
+        return Group {
+            LazyVStack(spacing: 6) {
+                if split.todo.isEmpty {
+                    workAllSettledCard
+                } else {
+                    ForEach(split.todo) { col in workPickRow(col) }
+                }
+                if !split.settled.isEmpty {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.18)) { showSettledColumns.toggle() }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: showSettledColumns ? "chevron.down" : "chevron.right")
+                                .font(.caption.weight(.bold))
+                            Text(showSettledColumns
+                                 ? "정리된 컬럼 접기"
+                                 : "정리된 컬럼도 보기 (\(split.settled.count)개)")
+                            if hiddenPicked > 0 && !showSettledColumns {
+                                Text("\(hiddenPicked)개 선택됨")
+                                    .font(.caption2.weight(.semibold))
+                                    .padding(.horizontal, 7).padding(.vertical, 2)
+                                    .background(Capsule().fill(Color.accentColor.opacity(0.14)))
+                                    .foregroundStyle(Color.accentColor)
+                            }
+                            Spacer()
+                        }
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6).padding(.vertical, 10)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("오타·형식 문제가 없는 컬럼입니다. 그래도 다듬고 싶으면 펼쳐서 고르세요.")
+                    if showSettledColumns {
+                        ForEach(split.settled) { col in workPickRow(col) }
+                    }
+                }
+            }
+        }
+    }
+
+    /// 손볼 거리가 하나도 없을 때 — 빈 목록 대신 무엇을 하면 되는지 알려 준다.
+    private var workAllSettledCard: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "checkmark.seal.fill")
+                .font(.system(size: 30)).foregroundStyle(.green)
+            Text("손볼 거리가 있는 컬럼이 없어요")
+                .font(.title3.weight(.semibold))
+            Text("오타 의심값이나 형식이 어긋난 값을 찾지 못했습니다.\n그냥 가져가도 되고, 아래에서 컬럼을 펼쳐 직접 다듬어도 됩니다.")
+                .font(.callout).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 28)
+    }
+
+    // MARK: 완성본 미리보기 (파일별 색 · 쪼개진 컬럼 표시)
+
+    /// 몇 번째로 올린 파일인지에 따른 색. 파일 칩·미리보기 줄이 같은 색을 쓴다.
+    private func fileTint(_ index: Int) -> Color { PreviewModel.paletteColor(index) }
+
+    /// 미리보기에 보여 줄 줄 — 파일마다 앞에서 몇 줄씩 골고루.
+    private func previewSampleRows() -> [(file: Int, row: [String: String])] {
+        guard !plans.isEmpty else { return [] }
+        let perFile = max(1, 9 / plans.count)
+        var out: [(file: Int, row: [String: String])] = []
+        for (i, plan) in plans.enumerated() {
+            for row in plan.rows.prefix(perFile) { out.append((i, row)) }
+        }
+        return out
+    }
+
+    /// 지금 제안 카드가 가리키는 컬럼 — 완성본 미리보기에서도 같은 열을 강조한다.
+    private var currentProposalColumn: UnifiedColumn? {
+        let order = proposalOrder
+        guard !order.isEmpty else { return nil }
+        return order[min(max(proposalIndex, 0), order.count - 1)]
+    }
+
+    /// 아직 한 칸으로 합쳐지지 않아 쪼개져 있는 컬럼인가 (일부 파일에만 있음).
+    private func isSplitColumn(_ col: UnifiedColumn) -> Bool {
+        guard plans.count > 1 else { return false }
+        let owners = filesHaving(col)
+        // 어느 파일에도 없는 컬럼(자동 생성·빈 자리)은 ‘쪼개진’ 게 아니다.
+        return owners > 0 && owners < plans.count
+    }
+
+    /// 이 컬럼을 가진 파일들의 순번.
+    private func columnOwnerIndices(_ col: UnifiedColumn) -> [Int] {
+        plans.indices.filter { plans[$0].isMapped(col) }
+    }
+
+    /// 한 파일에서만 온 컬럼이면 그 파일 색 — 열 배경으로 출처를 보여 준다.
+    private func columnOwnerTint(_ col: UnifiedColumn) -> Color? {
+        let owners = columnOwnerIndices(col)
+        guard plans.count > 1, owners.count == 1 else { return nil }
+        return fileTint(owners[0])
+    }
+
+    /// 사람 말로 된 출처 설명 — `0/3 파일` 같은 표기 대신.
+    private func splitCaption(_ col: UnifiedColumn) -> String? {
+        guard plans.count > 1 else { return nil }
+        let owners = columnOwnerIndices(col)
+        guard !owners.isEmpty, owners.count < plans.count else { return nil }
+        if let hint = pairHint(col) { return "‘\(hint)’와 같은 컬럼일까요?" }
+        if owners.count == 1 { return "‘\(plans[owners[0]].fileName)’에만 있음" }
+        let missing = plans.indices.filter { !owners.contains($0) }.map { plans[$0].fileName }
+        return "‘\(missing.prefix(2).joined(separator: ", "))’엔 없음"
+    }
+
+    /// 이 컬럼과 짝지을 후보가 있으면 그 이름.
+    private func pairHint(_ col: UnifiedColumn) -> String? {
+        for s in matchSuggestions {
+            if s.source == col, let b = s.best { return b.column.rawValue }
+            if let b = s.best, b.column == col { return s.source.rawValue }
+        }
+        return nil
+    }
+
+    /// 지금 합치면 이렇게 나온다 — 실제 값으로 보여 주는 미리보기.
+    @ViewBuilder
+    private var workPreviewCard: some View {
+        if !plans.isEmpty && !finalColumns.isEmpty {
+            let cols = finalColumns
+            let sample = previewSampleRows()
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("완성본 미리보기").font(.headline)
+                    Text("지금 합치면 이렇게 나옵니다 — 파일마다 앞 몇 줄")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                }
+                ScrollView([.horizontal, .vertical]) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        previewHeaderRow(cols)
+                        ForEach(sample.indices, id: \.self) { i in
+                            previewBodyRow(cols, sample[i], index: i)
+                        }
+                    }
+                }
+                .frame(maxHeight: 220)
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color(nsColor: .textBackgroundColor)))
+                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(Color.primary.opacity(0.08), lineWidth: 1))
+                previewLegend
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.primary.opacity(0.03)))
+        }
+    }
+
+    private func previewHeaderRow(_ cols: [UnifiedColumn]) -> some View {
+        HStack(spacing: 0) {
+            Text("파일")
+                .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                .frame(width: 108, alignment: .leading)
+                .padding(.horizontal, 8).padding(.vertical, 6)
+            ForEach(cols) { col in previewHeaderCell(col) }
+        }
+        .background(Color.primary.opacity(0.04))
+    }
+
+    /// 완성본 미리보기의 머리글 한 칸 — 이름 + 출처 점 + 사람 말 설명.
+    private func previewHeaderCell(_ col: UnifiedColumn) -> some View {
+        let split = isSplitColumn(col)
+        let here = (col == currentProposalColumn)
+        let owner = columnOwnerTint(col)
+        let owners = columnOwnerIndices(col)
+        let caption: String? = here ? "지금 볼 컬럼"
+            : (split ? splitCaption(col)
+               : (owners.isEmpty ? nil : (plans.count > 1 ? "모든 파일에 있음" : nil)))
+        let captionTint: Color = here ? .accentColor : (split ? .orange : .secondary)
+        let background: Color = here ? Color.accentColor.opacity(0.16)
+            : (owner?.opacity(0.16) ?? (split ? Color.orange.opacity(0.10) : Color.clear))
+        return VStack(alignment: .leading, spacing: 1) {
+            Text(col.rawValue)
+                .font(.caption.weight(here ? .bold : .semibold))
+                .foregroundStyle(here ? Color.accentColor : (split ? Color.orange : .primary))
+                .lineLimit(1).truncationMode(.tail)
+            if let caption {
+                HStack(spacing: 4) {
+                    if !here && plans.count > 1 { ownerDots(col) }
+                    Text(caption)
+                        .font(.caption2).foregroundStyle(captionTint)
+                        .lineLimit(1).truncationMode(.tail)
+                }
+            }
+        }
+        .frame(width: 132, alignment: .leading)
+        .padding(.horizontal, 8).padding(.vertical, 6)
+        .background(background)
+        .overlay(alignment: .leading) { proposalEdge(here) }
+        .overlay(alignment: .trailing) { proposalEdge(here) }
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(split ? Color.orange.opacity(0.5) : Color.primary.opacity(0.1))
+                .frame(height: 1)
+        }
+        .help(splitCaption(col).map { "\(col.rawValue) — \($0)" } ?? col.rawValue)
+    }
+
+    private func previewBodyRow(_ cols: [UnifiedColumn],
+                                _ item: (file: Int, row: [String: String]),
+                                index: Int) -> some View {
+        let plan = plans[item.file]
+        let tint = fileTint(item.file)
+        return HStack(spacing: 0) {
+            HStack(spacing: 5) {
+                RoundedRectangle(cornerRadius: 2).fill(tint).frame(width: 3, height: 14)
+                Text(plan.fileName)
+                    .font(.caption2).foregroundStyle(tint)
+                    .lineLimit(1).truncationMode(.middle)
+            }
+            .frame(width: 108, alignment: .leading)
+            .padding(.horizontal, 8).padding(.vertical, 5)
+            ForEach(cols) { col in previewBodyCell(col, plan: plan, row: item.row) }
+        }
+        .background(tint.opacity(0.10))
+    }
+
+    /// 이 컬럼이 어느 파일에 있는지 점으로 — 있는 파일은 그 색, 없는 파일은 빈 동그라미.
+    private func ownerDots(_ col: UnifiedColumn) -> some View {
+        let owners = Set(columnOwnerIndices(col))
+        return HStack(spacing: 2) {
+            ForEach(plans.indices, id: \.self) { i in
+                Circle()
+                    .fill(owners.contains(i) ? fileTint(i) : Color.clear)
+                    .overlay(Circle().stroke(owners.contains(i) ? Color.clear
+                                             : Color.secondary.opacity(0.5), lineWidth: 1))
+                    .frame(width: 6, height: 6)
+                    .help(plans[i].fileName + (owners.contains(i) ? "에 있음" : "엔 없음"))
+            }
+        }
+    }
+
+    /// 미리보기 셀 한 칸 — 배경색이 그 컬럼의 출처(파일)를 말해 준다.
+    private func previewBodyCell(_ col: UnifiedColumn, plan: FilePlan,
+                                 row: [String: String]) -> some View {
+        let value = plan.isMapped(col) ? plan.compose(col, from: row) : ""
+        let here = (col == currentProposalColumn)
+        let background: Color = here ? Color.accentColor.opacity(0.10)
+            : (columnOwnerTint(col)?.opacity(0.07)
+               ?? (isSplitColumn(col) ? Color.orange.opacity(0.05) : Color.clear))
+        return Text(value.isEmpty ? "—" : value)
+            .font(.caption)
+            .foregroundStyle(value.isEmpty ? Color.secondary.opacity(0.5) : .primary)
+            .lineLimit(1).truncationMode(.tail)
+            .frame(width: 132, alignment: .leading)
+            .padding(.horizontal, 8).padding(.vertical, 5)
+            .background(background)
+            .overlay(alignment: .leading) { proposalEdge(here) }
+            .overlay(alignment: .trailing) { proposalEdge(here) }
+            .help(value)
+    }
+
+    private var previewLegend: some View {
+        HStack(spacing: 12) {
+            ForEach(Array(plans.enumerated()), id: \.element.id) { idx, plan in
+                HStack(spacing: 4) {
+                    RoundedRectangle(cornerRadius: 2).fill(fileTint(idx)).frame(width: 10, height: 10)
+                    Text(plan.fileName)
+                        .font(.caption2).foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.middle)
+                }
+            }
+            Divider().frame(height: 12)
+            HStack(spacing: 4) {
+                RoundedRectangle(cornerRadius: 2).fill(Color.orange.opacity(0.3)).frame(width: 10, height: 10)
+                Text("아직 안 합쳐진 컬럼")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+            HStack(spacing: 4) {
+                Circle().fill(Color.secondary.opacity(0.35)).frame(width: 8, height: 8)
+                Text("열 배경·점 = 그 컬럼이 들어 있는 파일")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+            HStack(spacing: 4) {
+                Text("—").font(.caption2).foregroundStyle(.secondary.opacity(0.6))
+                Text("그 파일엔 없는 값 (빈칸)").font(.caption2).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// 이 앱이 하는 두 가지 일 중 첫 번째 — **합치기**.
+    /// 파일을 세로로 쌓을 때 컬럼이 제자리에 들어가는지만 본다.
+    /// 값이 어떻게 생겼는지(포맷·오타)는 2단계에서 다룬다.
+    @ViewBuilder
+    private var workMergeCard: some View {
+        if plans.count > 1 || baseIsUserFile {
+            let common = finalColumns.filter { filesHaving($0) == plans.count }
+            let paired = Set(matchSuggestions.map(\.source))
+                .union(matchSuggestions.compactMap { $0.best?.column })
+            let partial = finalColumns.filter {
+                let n = filesHaving($0)
+                return n > 0 && n < plans.count && !paired.contains($0)
+            }
+            let rows = plans.reduce(0) { $0 + $1.rows.count }
+            let clean = matchSuggestions.isEmpty && partial.isEmpty && shapeConflicts.isEmpty
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("1. 합치기")
+                        .font(.headline)
+                    Text("파일 \(plans.count)개를 세로로 쌓아 \(rows)행 · 컬럼 \(finalColumns.count)개")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    if clean {
+                        Label("충돌 없음", systemImage: "checkmark.seal.fill")
+                            .font(.caption.weight(.semibold)).foregroundStyle(.green)
+                    }
+                }
+                if clean {
+                    Text("같은 이름의 컬럼은 한 칸으로 겹치고, 없는 컬럼은 빈칸으로 둡니다. 합치기는 끝났고 남은 일은 값 정리뿐이에요.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    if !common.isEmpty {
+                        mergeLine("checkmark.circle.fill", .green,
+                                  "공통 컬럼 \(common.count)개는 그대로 겹쳐집니다", nil, nil)
+                    }
+                    if !matchSuggestions.isEmpty {
+                        mergeLine("arrow.trianglehead.merge", .accentColor,
+                                  "이름이 다른 같은 컬럼 \(matchSuggestions.count)건 — \(matchSummary)",
+                                  "짝지어 주기…") { showMatchSheet = true }
+                    }
+                    if !partial.isEmpty {
+                        mergeLine("square.dashed", .secondary,
+                                  "한 파일에만 있는 컬럼 \(partial.count)개 — 없는 파일의 행은 빈칸으로 남습니다 ("
+                                  + partial.prefix(4).map(\.rawValue).joined(separator: " · ")
+                                  + (partial.count > 4 ? " 외" : "") + ")", nil, nil)
+                    }
+                    if let conflict = shapeConflicts.first {
+                        mergeLine("exclamationmark.triangle.fill", .orange,
+                                  "파일마다 값 모양이 다른 컬럼 \(shapeConflicts.count)개 — 합치는 데는 문제없고, 2단계에서 한 형식으로 맞추면 됩니다 ("
+                                  + shapeConflicts.prefix(3).map(\.rawValue).joined(separator: " · ") + ")",
+                                  "‘\(conflict.rawValue)’ 정리하기") {
+                            focusColumns = [conflict]
+                            startWork()
+                        }
+                    }
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(clean ? Color.green.opacity(0.07) : Color.primary.opacity(0.04)))
+        }
+    }
+
+    private func mergeLine(_ symbol: String, _ tint: Color, _ text: String,
+                           _ actionTitle: String?, _ action: (() -> Void)?) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: symbol).foregroundStyle(tint).font(.caption)
+                .frame(width: 14)
+            Text(text)
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
+            if let actionTitle, let action {
+                Button(actionTitle, action: action).controlSize(.small)
+            }
+        }
+    }
+
+    private var matchSummary: String {
+        let head = matchSuggestions.prefix(3).compactMap { s in
+            s.best.map { "\(s.source.rawValue) → \($0.column.rawValue) (\($0.percent)%)" }
+        }.joined(separator: " · ")
+        return matchSuggestions.count > 3 ? head + " · 외 \(matchSuggestions.count - 3)개" : head
+    }
+
+    /// 틀에 없는 이번 컬럼 ↔ 이번 파일이 채우지 않는 틀 컬럼을 값으로 견줘 짝을 찾는다.
+    /// 값을 훑으므로 파일·틀이 바뀔 때만 계산해 둔다.
+    private func refreshMatches() {
+        guard !plans.isEmpty else {
+            matchSuggestions = []; matchSamples = [:]; shapeConflicts = []
+            return
+        }
+        shapeConflicts = computeShapeConflicts()
+        guard baseIsUserFile, base != nil else {
+            // 틀이 없으면 올린 파일들끼리 견준다 — 파일A ‘거주지’ ↔ 파일B ‘도시’.
+            let (suggestions, samples) = fileToFileSuggestions()
+            matchSuggestions = suggestions
+            matchSamples = samples.mapValues { vals in
+                var seen: [String] = []
+                for v in vals where !v.isEmpty && !seen.contains(v) {
+                    seen.append(v)
+                    if seen.count >= 6 { break }
+                }
+                return seen
+            }
+            return
+        }
+        let mine = Set(finalColumns)
+        let sources = finalColumns.filter { baseValues[$0] == nil }
+            .map { (column: $0, values: ColumnReviewBuilder.rawValues($0, in: plans)) }
+        let targets = baseValues.filter { !mine.contains($0.key) && !$0.value.isEmpty }
+            .map { (column: $0.key, values: $0.value) }
+        matchSuggestions = ColumnMatcher.suggest(sources: sources, targets: targets)
+
+        var samples: [UnifiedColumn: [String]] = [:]
+        for s in sources {
+            var seen: [String] = []
+            for v in s.values where !v.isEmpty && !seen.contains(v) {
+                seen.append(v)
+                if seen.count >= 6 { break }
+            }
+            samples[s.column] = seen
+        }
+        for t in targets { samples[t.column] = Array(t.values.prefix(6)) }
+        matchSamples = samples
+    }
+
+    /// 올린 파일들끼리 이름만 다른 같은 컬럼 찾기.
+    /// 모든 파일에 있는 컬럼은 이미 짝이 맞으므로, **일부 파일에만 있는 컬럼끼리만** 견준다.
+    /// 서로 다른 파일에 있는 것끼리만 짝지어 한 파일 안에서 두 컬럼이 겹치지 않게 한다.
+    private func fileToFileSuggestions() -> ([ColumnMatcher.Suggestion], [UnifiedColumn: [String]]) {
+        guard plans.count > 1 else { return ([], [:]) }
+        let partial = finalColumns.filter { col in
+            let n = filesHaving(col)
+            return n > 0 && n < plans.count
+        }
+        guard partial.count > 1 else { return ([], [:]) }
+
+        var owners: [UnifiedColumn: Set<Int>] = [:]
+        var values: [UnifiedColumn: [String]] = [:]
+        for col in partial {
+            owners[col] = Set(plans.indices.filter { plans[$0].isMapped(col) })
+            values[col] = ColumnReviewBuilder.rawValues(col, in: plans)
+        }
+
+        var out: [ColumnMatcher.Suggestion] = []
+        var used = Set<UnifiedColumn>()
+        // finalColumns 순서대로 도니까 먼저 나온(앞 파일의) 이름이 남는 이름이 된다.
+        for col in partial where !used.contains(col) {
+            let targets = partial.filter { other in
+                other != col && !used.contains(other)
+                    && (owners[col] ?? []).isDisjoint(with: owners[other] ?? [])
+            }.map { (column: $0, values: values[$0] ?? []) }
+            guard !targets.isEmpty else { continue }
+            let found = ColumnMatcher.suggest(sources: [(column: col, values: values[col] ?? [])],
+                                              targets: targets)
+            guard let best = found.first?.best else { continue }
+            // 남길 이름은 먼저 나온 `col` — 뒤 파일의 컬럼을 이쪽으로 옮긴다.
+            out.append(ColumnMatcher.Suggestion(
+                source: best.column,
+                candidates: [ColumnMatcher.Candidate(column: col, score: best.score,
+                                                     reason: best.reason)]))
+            used.insert(col)
+            used.insert(best.column)
+        }
+        return (out, values)
+    }
+
+    /// 같은 이름인데 파일마다 값 모양이 크게 다른 컬럼 —
+    /// 합치는 데는 문제가 없지만, 합친 뒤 한 형식으로 정리해야 한다.
+    private func computeShapeConflicts() -> [UnifiedColumn] {
+        guard plans.count > 1 else { return [] }
+        var out: [UnifiedColumn] = []
+        for col in finalColumns {
+            let owners = plans.filter { $0.isMapped(col) }
+            guard owners.count > 1 else { continue }
+            let profiles = owners.map { ColumnMatcher.profile(ColumnReviewBuilder.rawValues(col, in: [$0])) }
+            guard profiles.allSatisfy({ $0.distinct > 0 }) else { continue }
+            var worst = 1.0
+            for i in profiles.indices {
+                for j in profiles.indices where j > i {
+                    worst = min(worst, ColumnMatcher.shapeScore(profiles[i], profiles[j]))
+                }
+            }
+            if worst < 0.4 { out.append(col) }
+        }
+        return out
+    }
+
+    /// 고른 짝을 실제로 합친다 — 이번 컬럼의 값이 틀의 컬럼 자리로 들어간다.
+    /// 값은 하나도 바꾸지 않는다. 어느 칸에 넣을지만 바뀐다.
+    private func applyMatches(_ pairs: [(source: UnifiedColumn, target: UnifiedColumn)]) {
+        guard !pairs.isEmpty else { return }
+        for pair in pairs {
+            let from = pair.source.rawValue, to = pair.target.rawValue
+            for i in plans.indices {
+                guard let mine = plans[i].sources[pair.source] else { continue }
+                if plans[i].sources[pair.target] != nil {
+                    // 두 컬럼이 같은 파일에 다 있다 — 한 칸에 이어 붙인다 (값 사이 공백).
+                    plans[i].sources[pair.target]? += mine
+                    if (plans[i].separators[pair.target] ?? "").isEmpty {
+                        plans[i].separators[pair.target] = " "
+                    }
+                    plans[i].sources[pair.source] = nil
+                    plans[i].separators[pair.source] = nil
+                    plans[i].headers.removeAll { $0 == from }
+                    continue
+                }
+                for r in plans[i].rows.indices {
+                    if let v = plans[i].rows[r].removeValue(forKey: from) { plans[i].rows[r][to] = v }
+                }
+                if let hi = plans[i].headers.firstIndex(of: from) {
+                    if plans[i].headers.contains(to) { plans[i].headers.remove(at: hi) }
+                    else { plans[i].headers[hi] = to }
+                }
+                plans[i].sources[pair.target] = [to]
+                plans[i].sources[pair.source] = nil
+                plans[i].separators[pair.target] = plans[i].separators[pair.source]
+                plans[i].separators[pair.source] = nil
+            }
+            // 이미 손봐 둔 결정도 새 이름으로 옮겨 붙인다.
+            if let m = valueMap.removeValue(forKey: pair.source) {
+                valueMap[pair.target] = (valueMap[pair.target] ?? [:]).merging(m) { a, _ in a }
+            }
+            if let t = typeOverride.removeValue(forKey: pair.source) { typeOverride[pair.target] = t }
+            if let f = formatChoice.removeValue(forKey: pair.source) { formatChoice[pair.target] = f }
+            if let c = customFormat.removeValue(forKey: pair.source) { customFormat[pair.target] = c }
+        }
+
+        let before = focusColumns
+        finalColumns = ColumnReviewBuilder.plainColumns(in: plans)
+        reviews = ColumnReviewBuilder.plainReviews(in: plans)
+        seedValueMap(from: reviews)
+        if !baseIsUserFile { base = BaseSheet.stacked(plans, name: stackedName(plans)) }
+
+        var next = before.intersection(Set(finalColumns))
+        for pair in pairs where before.contains(pair.source) { next.insert(pair.target) }
+        focusColumns = next
+        includedColumns = next
+        checked = checked.intersection(Set(finalColumns))
+        errorMessage = nil
+        refreshMatches()
+        refreshPreview()
+        scheduleSave()
+    }
+
+    /// 틀을 기준으로 이번 파일들이 어디까지 채우는지 한 줄로.
+    private func baseCoverageLine(_ sheet: BaseSheet) -> String {
+        let baseCols = sheet.columns
+        let covered = baseCols.filter { finalColumns.contains($0) }.count
+        let fresh = finalColumns.filter { baseValues[$0] == nil }.count
+        var line = "틀 ‘\(sheet.name)’ 컬럼 \(baseCols.count)개 중 \(covered)개를 이번 파일이 채웁니다"
+        if baseCols.count - covered > 0 { line += " · \(baseCols.count - covered)개는 기존 값 그대로" }
+        if fresh > 0 { line += " · 틀에 없는 새 컬럼 \(fresh)개" }
+        return line
+    }
+
+    /// 이 컬럼을 가진 파일 수 — 한 파일에만 있는 컬럼을 눈에 띄게 한다.
+    private func filesHaving(_ col: UnifiedColumn) -> Int {
+        plans.filter { $0.isMapped(col) }.count
+    }
+
+    private func workPickRow(_ col: UnifiedColumn) -> some View {
+        let on = focusColumns.contains(col)
+        let status = focusStatus(col)
+        let owners = filesHaving(col)
+        let partial = plans.count > 1 && owners < plans.count
+        return Button {
+            if on { focusColumns.remove(col) } else { focusColumns.insert(col) }
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: on ? "checkmark.square.fill" : "square")
+                    .font(.title3)
+                    .foregroundStyle(on ? Color.accentColor : Color.secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(col.rawValue)
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(on ? .primary : .secondary)
+                        .lineLimit(1).truncationMode(.tail).help(col.rawValue)
+                    Text(status.text)
+                        .font(.caption)
+                        .foregroundStyle(status.warn ? Color.orange : Color.secondary)
+                }
+                Spacer(minLength: 8)
+                if partial {
+                    Text("\(owners)/\(plans.count) 파일")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(Capsule().fill(Color.primary.opacity(0.06)))
+                        .help("이 컬럼이 없는 파일의 행은 빈칸으로 남습니다. 이름만 다른 같은 컬럼이라면 검토 화면의 ‘여러 칸 합치기’에서 짝지어 주세요.")
+                }
+                if status.warn {
+                    Text(status.badge)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.orange)
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(Capsule().fill(Color.orange.opacity(0.12)))
+                }
+            }
+            .padding(.horizontal, 14).padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(on ? Color.accentColor.opacity(0.06) : Color(nsColor: .controlBackgroundColor)))
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(on ? Color.accentColor.opacity(0.35) : Color.primary.opacity(0.06),
+                        lineWidth: 1))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// 파일이 아직 없을 때 — 합칠 파일들을 끌어다 놓거나 골라서 시작.
+    private var workDropView: some View {
+        VStack(spacing: 22) {
+            Spacer(minLength: 0)
+
+            workBaseInvite
+                .frame(maxWidth: 600)
+                .padding(.horizontal, 40)
+
+            VStack(spacing: 14) {
+                Image(systemName: isDropTargeted ? "tray.and.arrow.down.fill" : "tray.full")
+                    .font(.system(size: 46))
+                    .foregroundStyle(Color.accentColor)
+                Text("2. 합칠 파일들을 모두 올려주세요")
+                    .font(.system(.largeTitle, design: .rounded).weight(.bold))
+                    .multilineTextAlignment(.center)
+                Text("CSV·XLSX 여러 개를 한꺼번에 끌어다 놓으면 같은 이름의 컬럼끼리 맞춰 이어 붙입니다.\n그다음 지금 고칠 컬럼만 고르면 돼요 — 나머지는 올린 그대로 나갑니다.")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button(action: pickWorkFiles) {
+                    Text("파일 고르기…").fontWeight(.semibold)
+                }
+                .controlSize(.large)
+                .buttonStyle(.borderedProminent)
+                Text("전에 만들어 둔 통합본은 여기 말고 위 1번 칸에 넣어 주세요.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: 520)
+            .padding(40)
+            .frame(maxWidth: .infinity)
+            .background(RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(isDropTargeted ? Color.accentColor.opacity(0.10) : Color.primary.opacity(0.03)))
+            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(isDropTargeted ? Color.accentColor : Color.primary.opacity(0.12),
+                              style: StrokeStyle(lineWidth: isDropTargeted ? 2 : 1, dash: [7, 5])))
+            .padding(.horizontal, 40)
+
+            if let errorMessage { errorLabel(errorMessage).frame(maxWidth: 520) }
+
+            if let resumable {
+                resumeCard(resumable).frame(maxWidth: 560)
+            }
+
+            // 애플 아카데미 전용 흐름 — 채널 판별·중복 제거·Unique ID까지 자동으로.
+            Button {
+                errorMessage = nil
+                stage = .files
+            } label: {
+                Label("애플 아카데미 지원 파일이에요 (중복 제거·Unique ID까지 자동)",
+                      systemImage: "wand.and.stars")
+            }
+            .buttonStyle(.link)
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// 첫 화면에서 함께 묻는다: 맞출 ‘틀’(만들던 통합본·양식)이 있나요?
+    /// 있으면 그 파일의 컬럼 구성·값을 그대로 두고 고른 컬럼만 덮어쓴다.
+    @ViewBuilder
+    private var workBaseInvite: some View {
+        Group {
+            if baseIsUserFile, let base {
+                HStack(spacing: 10) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.title3).foregroundStyle(.green)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("1. 틀: \(base.name)")
+                            .font(.callout.weight(.semibold))
+                            .lineLimit(1).truncationMode(.middle)
+                        Text("이 파일의 컬럼 구성과 값을 그대로 두고, 이번에 고친 컬럼만 덮어씁니다. 이제 아래 2번 칸에 합칠 파일을 올려 주세요.")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 8)
+                    Button("바꾸기…") { chooseBase() }
+                        .controlSize(.small)
+                    Button("해제") { clearUserBase() }
+                        .controlSize(.small)
+                }
+                .padding(.horizontal, 14).padding(.vertical, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.green.opacity(0.09)))
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(Color.green.opacity(0.45), lineWidth: 1))
+            } else {
+                HStack(spacing: 12) {
+                    Image(systemName: "doc.on.doc")
+                        .font(.title2)
+                        .foregroundStyle(isBaseDropTargeted ? Color.accentColor : .secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("1. 맞출 틀이 있나요?  —  없으면 건너뛰세요")
+                            .font(.callout.weight(.semibold))
+                        Text("전에 만들어 둔 통합본이나 채워 넣을 양식이 있으면 여기에 먼저 끌어다 놓으세요.\n그 파일은 합쳐지지 않고 결과물의 틀이 됩니다 — 컬럼 구성·값은 그대로, 이번에 고친 컬럼만 덮어써요.")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 8)
+                    Button("틀 파일 고르기…") { chooseBase() }
+                        .controlSize(.small)
+                }
+                .padding(.horizontal, 14).padding(.vertical, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(isBaseDropTargeted ? Color.accentColor.opacity(0.10)
+                                             : Color.primary.opacity(0.03)))
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(isBaseDropTargeted ? Color.accentColor : Color.primary.opacity(0.14),
+                                  style: StrokeStyle(lineWidth: isBaseDropTargeted ? 2 : 1, dash: [5, 4])))
+            }
+        }
+        // 이 칸에 떨어뜨린 파일은 합칠 파일이 아니라 ‘틀’ — 바깥 드롭보다 이쪽이 먼저 받는다.
+        .onDrop(of: [.fileURL], isTargeted: $isBaseDropTargeted, perform: acceptBaseDrop)
+    }
+
     // MARK: - Stage 1: add files (centered onboarding)
 
     private var filesStage: some View {
@@ -150,9 +1452,9 @@ struct ContentView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                         .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
                         .accessibilityLabel("데이터 마법사 로고")
-                    Text("데이터 마법사")
+                    Text("여러 파일 하나로 합치기")
                         .font(.system(.largeTitle, design: .rounded).weight(.bold))
-                    Text("흩어진 지원 파일들을 추가하면, 완성될 컬럼과 그 안의 값을 하나씩 확인한 뒤 하나의 명단으로 만듭니다.")
+                    Text("흩어진 지원 파일들을 추가하면, 완성될 컬럼과 그 안의 값을 하나씩 확인한 뒤 하나의 명단으로 만듭니다. 파일 하나만 고칠 거라면 뒤로 가세요.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -192,6 +1494,9 @@ struct ContentView: View {
                 .disabled(inputs.isEmpty || isPreparing)
 
                 if let errorMessage { errorLabel(errorMessage) }
+
+                Button("← 파일 하나 고치기로 돌아가기") { backToWork() }
+                    .buttonStyle(.link)
                 Spacer(minLength: 0)
             }
             .frame(maxWidth: 520)
@@ -247,16 +1552,31 @@ struct ContentView: View {
     /// 데이터가 있는(검토 대상) 최종 컬럼 집합 — 이 안에 있으면 ‘데이터 있음’.
     private var dataColumns: Set<UnifiedColumn> { Set(finalColumns) }
 
-    /// 컬럼 선택 화면에 보여줄 전체 후보 — 스키마 73컬럼을 순서대로.
-    /// 참조가 있으면 참조 컬럼을 맨 위로, 없으면 데이터 있는 컬럼을 위로 모아
-    /// 인지부하를 줄인다. (각 그룹 안에서는 스키마 순서를 유지.)
+    /// 이번 작업이 다루는 컬럼 전체와 그 순서 — 목록·내보내기의 기준선.
+    /// 고정 스키마가 없어졌으므로 상수가 아니라 이번 파일들에서 계산한다:
+    /// 기준 파일(있으면) 순서 → 이번 데이터의 컬럼 → 아카데미 프리셋의 나머지.
+    private var allColumns: [UnifiedColumn] {
+        var out: [UnifiedColumn] = []
+        var seen = Set<UnifiedColumn>()
+        for c in (base?.columns ?? []) where seen.insert(c).inserted { out.append(c) }
+        for c in finalColumns where seen.insert(c).inserted { out.append(c) }
+        for c in referenceColumns.sorted(by: { $0.rawValue < $1.rawValue })
+        where seen.insert(c).inserted { out.append(c) }
+        return out
+    }
+
+    /// 컬럼 선택 화면에 보여줄 후보 — 이번 데이터의 컬럼이 먼저, 아카데미 프리셋의
+    /// 빈 자리 컬럼은 뒤에. 참조가 있으면 참조 컬럼을 맨 위로 올린다.
     private var columnCandidates: [UnifiedColumn] {
+        var universe = allColumns
+        var seen = Set(universe)
+        for c in UnifiedColumn.academyPreset where seen.insert(c).inserted { universe.append(c) }
         func rank(_ c: UnifiedColumn) -> Int {
             if referenceColumns.contains(c) { return 0 }
             if dataColumns.contains(c) { return 1 }
             return 2
         }
-        return UnifiedColumn.allCases.enumerated()
+        return universe.enumerated()
             .sorted { (rank($0.element), $0.offset) < (rank($1.element), $1.offset) }
             .map { $0.element }
     }
@@ -296,40 +1616,82 @@ struct ContentView: View {
         }
     }
 
-    /// 첫 갈림길: 맞출 통합본(틀)이 이미 있는지 묻는다.
-    /// 있으면 그 틀 구성에 데이터를 빠짐없이 채우고(참조 로드 → 바로 검토),
-    /// 없으면 남길 컬럼을 직접 골라 새 틀을 만든다.
+    /// 첫 갈림길: 이번 작업을 어떤 식으로 할지 고른다.
+    /// 1) 기존에 만들던 통합본에 지금 정제할 컬럼만 덮어쓰기(부분 정제),
+    /// 2) 기존 통합본의 컬럼 구성만 빌려 이번 데이터로 전부 새로 채우기,
+    /// ③ 남길 컬럼을 직접 골라 새 틀 만들기.
     private var columnForkView: some View {
         ScrollView {
-            VStack(spacing: 28) {
-                VStack(spacing: 10) {
-                    Image(systemName: "square.grid.3x3.topleft.filled")
-                        .font(.system(size: 40))
-                        .foregroundStyle(Color.accentColor)
-                    Text("맞출 통합본 틀이 있으신가요?")
+            VStack(spacing: 24) {
+                VStack(spacing: 8) {
+                    Text("결과물을 어디에 만들까요?")
                         .font(.system(.largeTitle, design: .rounded).weight(.bold))
                         .multilineTextAlignment(.center)
-                    Text("이미 완성해 둔 통합본이 있으면 그 컬럼 구성 그대로 이번 데이터를 빠짐없이 채워 넣고, 없으면 어떤 컬럼을 남길지 골라 새 틀을 만듭니다.")
+                    Text("방금 넣은 파일 \(plans.count)개를 어디에 담을지만 정하면 됩니다. 한 번에 모든 컬럼을 끝낼 필요는 없어요.")
                         .font(.callout).foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
-                HStack(alignment: .top, spacing: 16) {
-                    forkCard(icon: "doc.on.doc.fill",
-                             title: "네, 기존 통합본이 있어요",
-                             detail: "완성본 파일을 불러와 같은 컬럼 구성에 이번 데이터를 빠짐없이 채웁니다.",
-                             cta: "완성본 불러오기…",
+                VStack(spacing: 12) {
+                    // 1) 이미 저장해 둔 결과 파일을 계속 고쳐 나가는 경우.
+                    forkCard(number: 1,
+                             icon: "arrow.trianglehead.merge",
+                             title: "만들던 파일 이어서 고치기",
+                             when: "지난주에 도시까지 정리해서 저장해 뒀어요. 오늘은 도시 하나만 더 손보고 싶어요.",
+                             outcome: "결과물 = 그때 저장한 파일 그대로 + 오늘 고른 컬럼만 바뀜",
+                             cta: "만들던 파일 불러오기…",
                              prominent: true,
-                             action: chooseTemplate)
-                    forkCard(icon: "sparkles",
-                             title: "아니요, 새로 만들게요",
-                             detail: "남길 컬럼을 직접 골라 새 통합본 틀을 만듭니다.",
+                             action: chooseBase) {
+                        Text("지난주 파일의 한 사람")
+                            .foregroundStyle(.secondary)
+                        exampleLine("도시", "서울", "Seoul", changed: true)
+                        exampleLine("신분", "대학생", "대학생", changed: false)
+                        exampleLine("메모", "면접 우선", "면접 우선", changed: false)
+                        Text("오늘 고른 ‘도시’만 바뀌고 나머지는 그대로")
+                            .foregroundStyle(Color.accentColor)
+                    }
+
+                    // 2) 틀만 빌리고 값은 이번 데이터로 전부 새로.
+                    forkCard(number: 2,
+                             icon: "doc.on.doc.fill",
+                             title: "컬럼 구성만 따라 하기",
+                             when: "2분기 보고서랑 똑같은 컬럼 순서로, 7·8·9월 데이터를 처음부터 정리하고 싶어요.",
+                             outcome: "결과물 = 완전히 새 파일 (컬럼 이름·순서만 그 파일에서 빌려 옴)",
+                             cta: "틀만 불러오기…",
+                             prominent: false,
+                             action: chooseTemplate) {
+                        Text("2분기 보고서에서 빌리는 것")
+                            .foregroundStyle(.secondary)
+                        Text("컬럼 이름·순서:  이름 · 도시 · 신분")
+                        Text("값은 안 씀 (사람도 안 가져옴)")
+                            .foregroundStyle(.secondary)
+                        Divider().padding(.vertical, 1)
+                        Text("오늘 넣은 7·8·9월 파일의 사람들로 전부 새로 채움")
+                            .foregroundStyle(Color.accentColor)
+                    }
+
+                    // ③ 맨 처음부터.
+                    forkCard(number: 3,
+                             icon: "sparkles",
+                             title: "처음부터 새로 만들기",
+                             when: "이 도구는 오늘 처음 써요. 참고할 파일도 없어요.",
+                             outcome: "결과물 = 완전히 새 파일 (남길 컬럼을 다음 화면에서 직접 체크)",
                              cta: "컬럼 직접 고르기",
                              prominent: false,
-                             action: { columnMode = .fromScratch })
+                             action: { base = nil; patch = nil; focusColumns = []
+                                       columnMode = .fromScratch }) {
+                        Text("다음 화면에서 이렇게 고릅니다")
+                            .foregroundStyle(.secondary)
+                        Text("☑ 이름      ☑ 도시")
+                        Text("☑ 전화번호  ☐ 주소")
+                        Text("체크한 컬럼만 결과물에 남음")
+                            .foregroundStyle(Color.accentColor)
+                    }
                 }
-                .frame(maxWidth: 620)
+                .frame(maxWidth: 900)
+
+                forkHelp.frame(maxWidth: 900)
 
                 if let errorMessage { errorLabel(errorMessage).frame(maxWidth: 520) }
 
@@ -337,42 +1699,124 @@ struct ContentView: View {
                     .controlSize(.large)
                 Spacer(minLength: 0)
             }
-            .frame(maxWidth: 680)
-            .padding(40)
+            .frame(maxWidth: 960)
+            .padding(32)
             .frame(maxWidth: .infinity)
         }
     }
 
-    /// 갈림길의 큰 선택 카드 하나.
-    private func forkCard(icon: String, title: String, detail: String,
-                          cta: String, prominent: Bool,
-                          action: @escaping () -> Void) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Image(systemName: icon)
-                .font(.system(size: 30))
-                .foregroundStyle(prominent ? Color.accentColor : Color.secondary)
-            Text(title).font(.title3.weight(.bold))
-                .fixedSize(horizontal: false, vertical: true)
-            Text(detail).font(.callout).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 8)
-            Group {
-                if prominent {
-                    Button(action: action) {
-                        Text(cta).fontWeight(.semibold).frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                } else {
-                    Button(action: action) {
-                        Text(cta).fontWeight(.semibold).frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                }
+    /// 그래도 못 고르겠을 때 보는 안내 — 질문 하나로 셋 중 하나에 도달한다.
+    private var forkHelp: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("어떤 걸 골라야 할지 모르겠다면", systemImage: "questionmark.circle.fill")
+                .font(.callout.weight(.semibold))
+            Text("전에 이 도구로 만들어 저장해 둔 결과 파일이 있나요?")
+                .font(.callout)
+            VStack(alignment: .leading, spacing: 6) {
+                forkHelpRow("있고, 그 파일을 계속 고쳐 나가고 싶다", 1, "만들던 파일 이어서 고치기")
+                forkHelpRow("있지만, 값은 오늘 넣은 데이터로 전부 다시 만들 거다", 2, "컬럼 구성만 따라 하기")
+                forkHelpRow("없다 / 오늘 처음 만든다", 3, "처음부터 새로 만들기")
             }
-            .controlSize(.large)
         }
-        .padding(20)
-        .frame(maxWidth: .infinity, minHeight: 220, alignment: .topLeading)
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .fill(Color.primary.opacity(0.035)))
+    }
+
+    private func forkHelpRow(_ situation: String, _ number: Int, _ title: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text("•").foregroundStyle(.secondary)
+            Text(situation)
+                .fixedSize(horizontal: false, vertical: true)
+            Image(systemName: "arrow.right").font(.caption2).foregroundStyle(.secondary)
+            Text("\(number)번 · \(title)")
+                .fontWeight(.semibold).foregroundStyle(Color.accentColor)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .font(.callout)
+    }
+
+    /// 예시 박스 안의 한 줄: `도시   서울 → Seoul`.
+    /// 바뀌는 칸만 색·굵기로 튀게 해서, 무엇이 달라지는지 글 없이도 보이게 한다.
+    private func exampleLine(_ field: String, _ before: String, _ after: String,
+                             changed: Bool) -> some View {
+        HStack(spacing: 5) {
+            Text(field)
+                .foregroundStyle(.secondary)
+                .frame(width: 40, alignment: .leading)
+            Text(before).foregroundStyle(.secondary)
+            Image(systemName: changed ? "arrow.right" : "equal")
+                .font(.system(size: 8))
+                .foregroundStyle(changed ? Color.accentColor : Color.secondary.opacity(0.5))
+            Text(after)
+                .fontWeight(changed ? .bold : .regular)
+                .foregroundStyle(changed ? Color.accentColor : Color.secondary)
+            Spacer(minLength: 0)
+        }
+        .lineLimit(1)
+    }
+
+    /// 갈림길의 선택 카드 하나 — 번호·제목·‘이럴 때’ 한 문장·결과물, 그리고 오른쪽에 실제 값 예시.
+    private func forkCard<Example: View>(number: Int, icon: String, title: String,
+                                         when: String, outcome: String,
+                                         cta: String, prominent: Bool,
+                                         action: @escaping () -> Void,
+                                         @ViewBuilder example: () -> Example) -> some View {
+        HStack(alignment: .top, spacing: 16) {
+            VStack(spacing: 6) {
+                ZStack {
+                    Circle()
+                        .fill(prominent ? Color.accentColor : Color.secondary.opacity(0.25))
+                        .frame(width: 26, height: 26)
+                    Text("\(number)").font(.subheadline.weight(.bold))
+                        .foregroundStyle(prominent ? .white : .secondary)
+                }
+                Image(systemName: icon)
+                    .font(.system(size: 20))
+                    .foregroundStyle(prominent ? Color.accentColor : Color.secondary)
+            }
+            .frame(width: 30)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text(title).font(.title3.weight(.bold))
+                    .fixedSize(horizontal: false, vertical: true)
+                // 사용자가 스스로에게 할 법한 말 그대로 — 자기 상황을 알아보게.
+                Text("“\(when)”")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Label(outcome, systemImage: "arrow.right.circle.fill")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(prominent ? Color.accentColor : Color.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 4)
+                Group {
+                    if prominent {
+                        Button(action: action) { Text(cta).fontWeight(.semibold) }
+                            .buttonStyle(.borderedProminent)
+                    } else {
+                        Button(action: action) { Text(cta).fontWeight(.semibold) }
+                            .buttonStyle(.bordered)
+                    }
+                }
+                .controlSize(.large)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            VStack(alignment: .leading, spacing: 4) {
+                example()
+            }
+            .font(.system(.caption, design: .monospaced))
+            .frame(width: 290, alignment: .leading)
+            .padding(12)
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color(nsColor: .textBackgroundColor)))
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1))
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(prominent ? Color.accentColor.opacity(0.06)
@@ -413,12 +1857,12 @@ struct ContentView: View {
 
             // Quick actions + count
             HStack(spacing: 10) {
-                Text("선택 \(includedColumns.count) / \(UnifiedColumn.allCases.count)개")
+                Text("선택 \(includedColumns.count) / \(columnCandidates.count)개")
                     .font(.headline).monospacedDigit()
                 Spacer()
                 Button("데이터 있는 것만") { includedColumns = dataColumns }
                     .help("값이 실제로 들어 있는 컬럼만 남깁니다. 빈 자리 컬럼은 제외돼요.")
-                Button("전체 선택") { includedColumns = Set(UnifiedColumn.allCases) }
+                Button("전체 선택") { includedColumns = Set(columnCandidates) }
                 Button("전체 해제") { includedColumns = [] }
             }
             .controlSize(.regular)
@@ -524,6 +1968,247 @@ struct ContentView: View {
         .buttonStyle(.plain)
     }
 
+    // MARK: - Stage 1.5b: 이번에 정제할 컬럼 고르기 (부분 정제)
+
+    /// 이번에 손볼 후보 — 새로 넣은 파일에 데이터가 있는 최종 컬럼.
+    /// 손댈 거리가 남은 컬럼(⚠️)을 위로, 그다음 기존본에 이미 있는 컬럼 순.
+    private var focusCandidates: [UnifiedColumn] {
+        let byColumn = Dictionary(reviews.map { ($0.column, $0) }, uniquingKeysWith: { a, _ in a })
+        func rank(_ c: UnifiedColumn) -> Int {
+            guard let r = byColumn[c] else { return 3 }
+            if r.kind == .derived { return 2 }
+            if openCount(r) > 0 { return 0 }
+            return isDecisionRelevant(r) ? 1 : 2
+        }
+        return finalColumns.enumerated()
+            .sorted { (rank($0.element), $0.offset) < (rank($1.element), $1.offset) }
+            .map { $0.element }
+    }
+
+    /// 지금 상태로 정제할 거리가 남아 있는 컬럼들 (‘손볼 거리 있는 것만’ 버튼용).
+    private var unresolvedColumns: Set<UnifiedColumn> {
+        Set(reviews.filter { $0.kind != .derived && openCount($0) > 0 }.map { $0.column })
+    }
+
+    // MARK: - 완성될 틀 기준 진단
+
+    /// 틀에 비춰 이 컬럼에 할 일이 남았는가.
+    /// 값 자체의 오타·형식(openCount)과 달리, ‘완성본에 이미 들어 있는 모양’과
+    /// 이번 데이터가 어긋나는지를 본다.
+    struct TemplateGap {
+        var isNew = false     // 틀에 없는 컬럼 — 결과 파일 맨 뒤에 새로 생긴다
+        var outside = 0       // 틀의 값 목록에 없는 값 종 수
+        var known = 0         // 틀이 이 컬럼에 가지고 있는 값 종 수
+        var locked = false    // 이미 틀 목록으로 잠가 둠 (그때부턴 openCount가 셈)
+        var comparable = false // 값 목록으로 견줄 수 있는 컬럼인가 (범주형)
+        var warn: Bool { isNew || outside > 0 }
+    }
+
+    /// 틀을 잡거나 바꿀 때 한 번 훑어 컬럼별 값 목록을 만들어 둔다.
+    private func indexBase() {
+        guard baseIsUserFile, let sheet = base else {
+            baseValues = [:]; baseCategorical = []
+            return
+        }
+        var vals: [UnifiedColumn: [String]] = [:]
+        var cats: Set<UnifiedColumn> = []
+        for col in sheet.columns {
+            let v = sheet.distinctValues(col)
+            vals[col] = v
+            if sheet.looksCategorical(col, values: v) { cats.insert(col) }
+        }
+        baseValues = vals
+        baseCategorical = cats
+    }
+
+    private func templateGap(_ review: ColumnReview) -> TemplateGap {
+        var gap = TemplateGap()
+        guard baseIsUserFile, base != nil, review.kind != .derived else { return gap }
+        guard let known = baseValues[review.column] else {
+            gap.isNew = true
+            return gap
+        }
+        gap.known = known.count
+        if !(allowedValues[review.column] ?? []).isEmpty {
+            // 이미 목록으로 잠갔다 — 남은 값은 openCount가 세고 있으므로 여기서 또 세지 않는다.
+            gap.locked = true
+            gap.comparable = true
+            return gap
+        }
+        guard baseCategorical.contains(review.column) else { return gap }
+        gap.comparable = true
+        let set = Set(known)
+        let map = valueMap[review.column] ?? [:]
+        gap.outside = review.values.filter { !set.contains(map[$0.value] ?? $0.value) }.count
+        return gap
+    }
+
+    private func templateGap(_ col: UnifiedColumn) -> TemplateGap {
+        reviewFor(col).map(templateGap) ?? TemplateGap()
+    }
+
+    /// 틀의 값 목록을 이 컬럼의 허용 목록으로 삼는다 —
+    /// 이후로는 목록 밖 값이 미해결로 잡히고, 유사도 추천·선택 메뉴가 붙는다.
+    private func lockToBase(_ col: UnifiedColumn) {
+        guard let known = baseValues[col], !known.isEmpty else { return }
+        allowedValues[col] = known
+        refreshPreview()
+    }
+
+    private func unlockFromBase(_ col: UnifiedColumn) {
+        allowedValues[col] = []
+        refreshPreview()
+    }
+
+    /// 컬럼 한 줄에 붙는 상태 문구 — 값 종 수와 남은 결정 건수, 그리고 틀과의 어긋남.
+    private func focusStatus(_ col: UnifiedColumn) -> (text: String, warn: Bool, badge: String) {
+        guard let r = reviewFor(col) else { return ("데이터 있음", false, "") }
+        if r.kind == .derived { return ("자동 생성 컬럼 — 합칠 때 새로 계산됩니다", false, "") }
+        let open = openCount(r)
+        let gap = templateGap(r)
+        let head = "\(r.total)행 · \(r.distinctCount)종"
+        if open > 0 { return ("\(head) · 미정리 \(open)종", true, "손볼 거리 있음") }
+        if gap.isNew {
+            return ("\(head) · 틀에 없는 컬럼 — 결과 파일 맨 뒤에 새로 생깁니다", true, "틀에 없는 컬럼")
+        }
+        if gap.outside > 0 {
+            return ("\(head) · 틀에 없는 값 \(gap.outside)종 (틀은 \(gap.known)종)", true, "틀과 다름")
+        }
+        if gap.known > 0 { return ("\(head) · 틀에 있는 값과 맞음", false, "") }
+        return (isDecisionRelevant(r) ? "\(head) · 정리됨" : head, false, "")
+    }
+
+    /// 기존 통합본에 이번에 고른 컬럼만 덮어쓰는 흐름의 컬럼 선택 화면.
+    /// 체크하지 않은 컬럼은 기존 파일 값이 그대로 유지된다.
+    @ViewBuilder
+    private var focusStage: some View {
+        if let base {
+            VStack(spacing: 0) {
+                HStack(alignment: .firstTextBaseline) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("이번에 정제할 컬럼 고르기").font(.title2.weight(.bold))
+                        Text("체크한 컬럼만 새로 정제해서 ‘\(base.name)’에 덮어씁니다. 체크하지 않은 컬럼은 기존 파일 값이 그대로 유지돼요.")
+                            .font(.body).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer()
+                    if let errorMessage { errorLabel(errorMessage).frame(maxWidth: 260) }
+                    Button("← 뒤로") { columnMode = nil; stage = .columns }
+                    Button(action: proceedToFocusedReview) {
+                        Text("다음: 값 검토 →").fontWeight(.semibold)
+                    }
+                    .controlSize(.large)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(focusColumns.isEmpty)
+                    .help(focusColumns.isEmpty ? "정제할 컬럼을 최소 하나 골라 주세요."
+                                               : "고른 컬럼만 검토하고, 그 값만 기존본에 반영합니다.")
+                }
+                .padding(20)
+                Divider()
+
+                baseBar(base)
+                Divider()
+
+                HStack(spacing: 10) {
+                    Text("선택 \(focusColumns.count) / \(finalColumns.count)개")
+                        .font(.headline).monospacedDigit()
+                    Spacer()
+                    Button("손볼 거리 있는 것만") { focusColumns = unresolvedColumns }
+                        .disabled(unresolvedColumns.isEmpty)
+                        .help("전화번호 표준화 실패·매핑표 밖 값·오타 의심값이 남은 컬럼만 고릅니다.")
+                    Button("전체 선택") { focusColumns = Set(finalColumns) }
+                    Button("전체 해제") { focusColumns = [] }
+                }
+                .controlSize(.regular)
+                .padding(.horizontal, 24).padding(.vertical, 12)
+                Divider()
+
+                ScrollView {
+                    LazyVStack(spacing: 6) {
+                        ForEach(focusCandidates) { col in
+                            focusPickRow(col, base: base)
+                        }
+                    }
+                    .padding(24)
+                }
+            }
+        } else {
+            Color.clear.onAppear { stage = .columns; columnMode = nil }
+        }
+    }
+
+    /// 기준으로 삼은 기존 통합본 요약 줄.
+    private func baseBar(_ base: BaseSheet) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "arrow.trianglehead.merge")
+                .foregroundStyle(Color.accentColor)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("이어붙일 파일: \(base.name)")
+                    .font(.callout.weight(.medium))
+                    .lineLimit(1).truncationMode(.middle)
+                Text("\(base.rows.count)행 · 컬럼 \(base.headers.count)개 — 고르지 않은 컬럼은 그대로 보존")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("다른 파일로 바꾸기…") { chooseBase() }
+        }
+        .padding(.horizontal, 24).padding(.vertical, 12)
+        .background(Color.accentColor.opacity(0.05))
+    }
+
+    private func focusPickRow(_ col: UnifiedColumn, base: BaseSheet) -> some View {
+        let on = focusColumns.contains(col)
+        let status = focusStatus(col)
+        let inBase = base.columnHeader[col] != nil
+        return Button {
+            if on { focusColumns.remove(col) } else { focusColumns.insert(col) }
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: on ? "checkmark.square.fill" : "square")
+                    .font(.title3)
+                    .foregroundStyle(on ? Color.accentColor : Color.secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(col.rawValue)
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(on ? .primary : .secondary)
+                        .lineLimit(1).truncationMode(.tail).help(col.rawValue)
+                    Text(status.text)
+                        .font(.caption)
+                        .foregroundStyle(status.warn ? Color.orange : Color.secondary)
+                }
+                Spacer(minLength: 8)
+                if status.warn {
+                    Text(status.badge)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.orange)
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(Capsule().fill(Color.orange.opacity(0.12)))
+                }
+                Text(inBase ? "기존본에 있음" : "새 컬럼으로 추가")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(inBase ? Color.secondary : Color.accentColor)
+                    .padding(.horizontal, 8).padding(.vertical, 3)
+                    .background(Capsule().fill(inBase ? Color.primary.opacity(0.06)
+                                                      : Color.accentColor.opacity(0.12)))
+                    .help(inBase ? "기존 파일의 같은 이름 컬럼에 덮어씁니다."
+                                 : "기존 파일에 없는 컬럼이라 맨 뒤에 새로 만들어 채웁니다.")
+            }
+            .padding(.horizontal, 14).padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(on ? Color.accentColor.opacity(0.06) : Color(nsColor: .controlBackgroundColor))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(on ? Color.accentColor.opacity(0.35) : Color.primary.opacity(0.06),
+                            lineWidth: 1)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
     // MARK: - Stage 2: column-by-column review with checkboxes
 
     /// 검토·미리보기에 실제로 나타나는 컬럼 — 데이터가 있는 최종 컬럼 중
@@ -534,9 +2219,9 @@ struct ContentView: View {
     private var visibleReviews: [ColumnReview] {
         reviews.filter { includedColumns.contains($0.column) }
     }
-    /// 내보내기에 쓸 컬럼 — 스키마(73컬럼) 순서를 지키며 선택된 것만.
+    /// 내보내기에 쓸 컬럼 — 이번 작업의 컬럼 순서를 지키며 선택된 것만.
     private var includedOrdered: [UnifiedColumn] {
-        UnifiedColumn.allCases.filter { includedColumns.contains($0) }
+        allColumns.filter { includedColumns.contains($0) }
     }
 
     private var allChecked: Bool {
@@ -718,58 +2403,31 @@ struct ContentView: View {
         decisionReviews.filter { !isResolved($0) }
     }
 
-    /// 병합 가능 조건: 남은 미해결 결정이 없다.
-    private var canMerge: Bool { openDecisions.isEmpty }
+    /// 유틸 모드인가 — 올린 파일을 그대로 다루는 흐름 (아카데미 통합 엔진을 쓰지 않음).
+    private var isUtility: Bool { !plans.isEmpty && plans.allSatisfy(\.passthrough) }
+
+    /// 언제든 가져갈 수 있다. 유틸은 사용자를 가로막지 않는다 —
+    /// 미해결이 남아 있으면 막는 대신 몇 종 남았는지 알려만 준다.
+    private var canMerge: Bool { true }
 
     private var reviewStage: some View {
         VStack(spacing: 0) {
             reviewToolbar
             Divider()
-            reviewTabBar
-            Divider()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 10) {
-                    switch reviewTab {
-                    case .todo:
-                        decisionProgressHeader
-                        if decisionReviews.isEmpty {
-                            emptyDecisionsCard
-                        } else {
-                            ForEach(decisionReviews) { review in
-                                reviewSection(review)
-                            }
-                        }
-                    case .all:
-                        progressHeader
-                        ForEach(visibleReviews) { review in
-                            reviewSection(review)
-                        }
-                    }
-                }
-                .padding(24)
+            if let col = openColumn, let review = reviewFor(col) {
+                columnDetailPage(review)
+            } else {
+                columnListPage
             }
         }
-        .onChange(of: checked) { _ in refreshPreview() }
-        .onChange(of: valueMap) { _ in refreshPreview() }
+        .onAppear { syncSteps() }
+        .onChange(of: checked) { _ in refreshPreview(); syncSteps() }
+        .onChange(of: valueMap) { _ in refreshPreview(); syncSteps() }
         .onChange(of: phoneTemplate) { _ in refreshPreview() }
-    }
-
-    /// 결정 TODO / 전체 컬럼 전환 탭. 각 탭에 남은 항목 배지를 붙여 준다.
-    private var reviewTabBar: some View {
-        HStack(spacing: 0) {
-            Picker("", selection: $reviewTab) {
-                Text(openDecisions.isEmpty
-                     ? "결정 TODO ✓"
-                     : "결정 TODO (\(openDecisions.count))").tag(ReviewTab.todo)
-                Text("전체 컬럼 \(visibleFinalColumns.count)").tag(ReviewTab.all)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(maxWidth: 360)
-            Spacer()
-        }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 10)
+        // 타입·형식은 값이 아니라 ‘무엇을 미해결로 볼지’를 바꾼다 — 컬럼 상태 표시가
+        // 따라가도록 여기서도 다시 계산한다.
+        .onChange(of: formatChoice) { _ in refreshPreview() }
+        .onChange(of: customFormat) { _ in refreshPreview() }
     }
 
     /// 결정할 게 하나도 없을 때(모두 자동 처리됨) 보여주는 안내.
@@ -777,9 +2435,9 @@ struct ContentView: View {
         VStack(spacing: 8) {
             Image(systemName: "checkmark.seal.fill")
                 .font(.system(size: 34)).foregroundStyle(.green)
-            Text("따로 결정할 항목이 없어요")
+            Text("눈에 띄는 문제가 없어요")
                 .font(.title3.weight(.semibold))
-            Text("전화번호·생년월일·매핑 값이 모두 자동으로 정리됐습니다.\n바로 합치거나, ‘전체 컬럼’ 탭에서 원하는 값을 더 다듬을 수 있어요.")
+            Text("고를 컬럼이 없습니다. ‘← 컬럼 고르기’에서 이번에 손볼 컬럼을 골라 주세요.")
                 .font(.body).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
@@ -788,41 +2446,362 @@ struct ContentView: View {
         .padding(.vertical, 40)
     }
 
-    /// 결정 TODO 탭의 진행 헤더: 해결한 결정 수 / 전체 + 진행 막대.
-    private var decisionProgressHeader: some View {
+    // MARK: - 컬럼 목록 → 컬럼 상세
+
+    /// 목록에 보여줄 순서 — 손볼 거리(⚠️) 있는 컬럼이 위, 그다음은 원래 컬럼 순서.
+    private var orderedReviewColumns: [UnifiedColumn] {
+        func rank(_ r: ColumnReview) -> Int {
+            if r.kind == .derived { return 3 }
+            if openCount(r) > 0 || templateGap(r).warn { return 0 }
+            return isDecisionRelevant(r) ? 1 : 2
+        }
+        return visibleReviews.enumerated()
+            .sorted { (rank($0.element), $0.offset) < (rank($1.element), $1.offset) }
+            .map { $0.element.column }
+    }
+
+    /// 목록 순서를 현재 컬럼 구성에 맞춘다. 구성이 바뀌었을 때만 다시 잡아
+    /// 값을 고치는 동안 줄이 튀지 않게 한다.
+    private func syncSteps() {
+        let cols = orderedReviewColumns
+        if Set(cols) != Set(stepOrder) { stepOrder = cols }
+        if let col = openColumn, !stepOrder.contains(col) { openColumn = nil }
+    }
+
+    /// 목록 순서에서 앞뒤 컬럼으로. 끝에서 더 가면 목록으로 돌아간다.
+    private func openStep(_ delta: Int) {
+        guard let col = openColumn, let i = stepOrder.firstIndex(of: col) else { return }
+        let j = i + delta
+        withAnimation(.easeInOut(duration: 0.15)) {
+            openColumn = stepOrder.indices.contains(j) ? stepOrder[j] : nil
+        }
+    }
+
+    // MARK: 목록 화면
+
+    private var columnListPage: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 8) {
+                columnListHeader
+                ForEach(stepOrder, id: \.self) { col in
+                    if let review = reviewFor(col) { columnRow(review) }
+                }
+                if stepOrder.isEmpty { emptyDecisionsCard }
+            }
+            .padding(24)
+        }
+    }
+
+    private var columnListHeader: some View {
         let total = decisionReviews.count
         let done = total - openDecisions.count
         return VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("결정해야 할 일")
+                    Text("컬럼 \(stepOrder.count)개")
                         .font(.title3.weight(.bold))
                     Text(openDecisions.isEmpty
-                         ? "모든 결정을 마쳤어요. 이제 ‘이대로 합치기’를 누르면 완성본이 만들어집니다."
-                         : "판단이 필요한 항목만 모았어요. 값을 고치거나 ‘이대로 확정’을 체크해 하나씩 지워 나가세요.")
+                         ? "손볼 값이 남지 않았어요. 컬럼을 눌러 자세히 볼 수 있고, 이제 가져가도 됩니다."
+                         : "컬럼을 누르면 그 컬럼만 자세히 봅니다. 손볼 거리가 있는 컬럼을 위에 모아 뒀어요.")
                         .font(.body).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer()
-                Text("\(done) / \(total) 해결")
-                    .font(.headline).monospacedDigit()
-                    .foregroundStyle(openDecisions.isEmpty ? Color.green : Color.primary)
+                if total > 0 {
+                    VStack(alignment: .trailing, spacing: 4) {
+                        Text("\(done) / \(total) 해결")
+                            .font(.headline).monospacedDigit()
+                            .foregroundStyle(openDecisions.isEmpty ? Color.green : Color.primary)
+                        ProgressView(value: Double(done), total: Double(max(total, 1)))
+                            .tint(openDecisions.isEmpty ? .green : .accentColor)
+                            .frame(width: 160)
+                    }
+                }
             }
-            ProgressView(value: total == 0 ? 1 : Double(done), total: total == 0 ? 1 : Double(total))
-                .tint(openDecisions.isEmpty ? .green : .accentColor)
+            if !openDecisions.isEmpty, let first = stepOrder.first(where: { r in
+                reviewFor(r).map { openCount($0) > 0 } ?? false
+            }) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) { openColumn = first }
+                } label: {
+                    Label("손볼 컬럼부터 시작하기 — \(first.rawValue)", systemImage: "play.fill")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
+            }
         }
-        .padding(.bottom, 8)
+        .padding(.bottom, 6)
     }
 
-    private func reviewSection(_ review: ColumnReview) -> some View {
+    /// 목록의 한 줄 — 눌러서 상세로. 추천값이 있으면 여기서 바로 고칠 수도 있다.
+    private func columnRow(_ review: ColumnReview) -> some View {
+        let open = openCount(review)
+        let gap = templateGap(review)
+        let attention = open > 0 || gap.warn
+        let isChecked = checked.contains(review.column)
+        let auto = autoFixCount(review)
+        let tint: Color = attention ? .orange : (isDecisionRelevant(review) ? .green : .secondary)
+        let symbol = attention ? "exclamationmark.triangle.fill"
+            : (isChecked ? "checkmark.circle.fill"
+                         : (isDecisionRelevant(review) ? "checkmark.circle" : "minus.circle"))
+        let badge = open > 0 ? "\(open)종 남음"
+            : (gap.isNew ? "틀에 없는 컬럼"
+                         : (gap.outside > 0 ? "틀에 없는 값 \(gap.outside)종" : ""))
+        return HStack(spacing: 12) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) { openColumn = review.column }
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: symbol)
+                        .font(.title3).foregroundStyle(tint)
+                        .frame(width: 20)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(review.column.rawValue)
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1).truncationMode(.tail)
+                        Text(subtitle(for: review))
+                            .font(.caption).foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 8)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if auto > 0 {
+                Button { applyAutoFix(review) } label: {
+                    Label("추천값으로 \(auto)건", systemImage: "wand.and.stars")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("오타·유사값을 추천 형태로 한 번에 바꿉니다. 열어서 직접 확인할 수도 있어요.")
+            }
+            if !badge.isEmpty {
+                Text(badge)
+                    .font(.caption2.weight(.semibold)).foregroundStyle(.orange)
+                    .padding(.horizontal, 8).padding(.vertical, 3)
+                    .background(Capsule().fill(Color.orange.opacity(0.12)))
+            }
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.bold)).foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(Color(nsColor: .controlBackgroundColor)))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .stroke(attention ? Color.orange.opacity(0.45) : Color.primary.opacity(0.07),
+                    lineWidth: attention ? 1.5 : 1))
+    }
+
+    // MARK: 컬럼 상세 화면
+
+    private func columnDetailPage(_ review: ColumnReview) -> some View {
+        let i = stepOrder.firstIndex(of: review.column)
+        return VStack(spacing: 0) {
+            detailNavBar(review, at: i)
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    detailIntro(review)
+                    reviewSection(review, alwaysExpanded: true)
+                    detailFooter(review, at: i)
+                }
+                .padding(24)
+            }
+        }
+    }
+
+    private func detailNavBar(_ review: ColumnReview, at i: Int?) -> some View {
+        HStack(spacing: 10) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) { openColumn = nil }
+            } label: {
+                Label("컬럼 목록", systemImage: "chevron.left")
+            }
+            Divider().frame(height: 16)
+            Text(review.column.rawValue)
+                .font(.headline)
+                .lineLimit(1).truncationMode(.tail)
+                .help(review.column.rawValue)
+            if let i {
+                Text("\(i + 1) / \(stepOrder.count)")
+                    .font(.subheadline).monospacedDigit().foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("← 이전 컬럼") { openStep(-1) }
+                .disabled((i ?? 0) == 0)
+            Button("다음 컬럼 →") { openStep(1) }
+                .disabled(i == nil || i! >= stepOrder.count - 1)
+        }
+        .padding(.horizontal, 24).padding(.vertical, 10)
+    }
+
+    /// ‘이 컬럼은 이런 값이에요’ — 무엇을 보고 있는지 한눈에.
+    private func detailIntro(_ review: ColumnReview) -> some View {
+        let open = openCount(review)
+        let samples = sampleValues(review)
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("이 컬럼은 이런 값이에요")
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(Color.accentColor)
+            Text(explain(review))
+                .font(.body).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            templateNote(review)
+            HStack(spacing: 8) {
+                statChip("\(review.total)행", "tablecells")
+                statChip("값 \(review.distinctCount)종", "square.stack.3d.up")
+                if open > 0 {
+                    statChip("손볼 값 \(open)종", "exclamationmark.triangle.fill", tint: .orange)
+                } else {
+                    statChip("손볼 값 없음", "checkmark.circle.fill", tint: .green)
+                }
+            }
+            if !samples.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("지금 들어 있는 값").font(.caption).foregroundStyle(.secondary)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(samples, id: \.self) { v in
+                                Text(v)
+                                    .font(.callout)
+                                    .lineLimit(1)
+                                    .padding(.horizontal, 8).padding(.vertical, 4)
+                                    .background(Capsule().fill(Color.primary.opacity(0.06)))
+                            }
+                            if review.distinctCount > samples.count {
+                                Text("… 외 \(review.distinctCount - samples.count)종")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .fill(Color.accentColor.opacity(0.06)))
+    }
+
+    /// 완성될 틀과 견준 결과 — 무엇이 어긋나는지, 어떻게 맞출지.
+    @ViewBuilder
+    private func templateNote(_ review: ColumnReview) -> some View {
+        let gap = templateGap(review)
+        if baseIsUserFile, let sheet = base, gap.isNew || gap.known > 0 {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: gap.warn ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                    .foregroundStyle(gap.warn ? Color.orange : Color.green)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(templateSentence(gap, sheet.name))
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if gap.outside > 0 {
+                        Button("틀의 값 목록으로 맞추기") { lockToBase(review.column) }
+                            .controlSize(.small)
+                            .help("틀에 있는 \(gap.known)종을 이 컬럼의 허용 목록으로 잡습니다. 목록 밖 값은 비슷한 값을 추천받아 골라 넣을 수 있어요.")
+                    } else if gap.locked {
+                        Button("틀 목록 잠금 해제") { unlockFromBase(review.column) }
+                            .controlSize(.small)
+                            .help("허용 목록을 풀고 값을 자유롭게 둡니다.")
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill((gap.warn ? Color.orange : Color.green).opacity(0.09)))
+        }
+    }
+
+    private func templateSentence(_ gap: TemplateGap, _ name: String) -> String {
+        if gap.isNew { return "틀 ‘\(name)’에는 없는 컬럼이에요. 결과 파일 맨 뒤에 새로 추가됩니다." }
+        if gap.outside > 0 {
+            return "틀에는 이 컬럼에 \(gap.known)종이 들어 있어요. 이번 값 중 \(gap.outside)종이 그 목록에 없습니다 — 틀에 맞추려면 아래 버튼을 누르세요."
+        }
+        if gap.locked { return "틀의 값 목록(\(gap.known)종)에 맞추는 중이에요. 목록 밖 값은 위에서 골라 넣으면 됩니다." }
+        if gap.comparable { return "이번 값은 모두 틀에 이미 있는 값이에요. 틀 기준으로 손볼 게 없습니다." }
+        return "틀에도 있는 컬럼이에요. 값이 행마다 달라서 목록으로 견주지는 않았습니다."
+    }
+
+    private func statChip(_ text: String, _ symbol: String, tint: Color = .secondary) -> some View {
+        Label(text, systemImage: symbol)
+            .font(.caption.weight(.medium))
+            .foregroundStyle(tint)
+            .padding(.horizontal, 8).padding(.vertical, 4)
+            .background(Capsule().fill(tint.opacity(0.12)))
+    }
+
+    /// 이 컬럼이 어떤 컬럼이고 무엇을 해 주는지 한 문장으로.
+    private func explain(_ review: ColumnReview) -> String {
+        if review.kind == .derived { return "합칠 때 자동으로 계산되는 컬럼이에요. 따로 고칠 값은 없습니다." }
+        let open = openCount(review)
+        let tail = open > 0
+            ? " 아직 \(open)종이 손볼 값으로 남아 있어요 — 고쳐도 되고 그대로 둬도 됩니다."
+            : " 지금은 손볼 값이 없어요."
+        switch effectiveType(review) {
+        case .format:
+            let f = effectiveFormat(review)
+            return "‘\(f.rawValue)’ 형식으로 맞추는 컬럼이에요. 목표 모양은 \(f.hint) 입니다." + tail
+        case .category:
+            return "정해진 몇 가지 값이 반복되는 컬럼이에요. 같은 뜻인데 다르게 쓴 값을 하나로 모읍니다." + tail
+        case .freeText:
+            return "사람마다 자유롭게 적는 값이에요. 값을 바꾸지 않고, 오타로 보이는 것만 짚어 드립니다." + tail
+        }
+    }
+
+    private func sampleValues(_ review: ColumnReview, _ n: Int = 8) -> [String] {
+        if !review.values.isEmpty { return review.values.prefix(n).map(\.value) }
+        return Array(review.samples.prefix(n))
+    }
+
+    private func detailFooter(_ review: ColumnReview, at i: Int?) -> some View {
+        let open = openCount(review)
+        let isLast = (i ?? 0) >= stepOrder.count - 1
+        return HStack(spacing: 10) {
+            Button("← 이전 컬럼") { openStep(-1) }
+                .disabled((i ?? 0) == 0)
+            Spacer()
+            if open > 0 {
+                Text("아직 \(open)종이 남았어요 — 그대로 둬도 됩니다")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Button("목록으로") {
+                withAnimation(.easeInOut(duration: 0.15)) { openColumn = nil }
+            }
+            Button {
+                if open > 0 { checked.insert(review.column) }   // 남은 값은 ‘이대로 확정’
+                openStep(1)
+            } label: {
+                Text(isLast ? "이 컬럼 끝내기 →" : (open > 0 ? "그대로 두고 다음 →" : "다음 컬럼 →"))
+                    .fontWeight(.semibold)
+            }
+            .controlSize(.large)
+            .buttonStyle(.borderedProminent)
+            .help(open > 0 ? "남은 값을 원본 그대로 두고 이 컬럼을 끝냅니다."
+                           : "이 컬럼은 정리가 끝났어요. 다음 컬럼으로 갑니다.")
+        }
+        .padding(.top, 4)
+    }
+
+    private func reviewSection(_ review: ColumnReview, alwaysExpanded: Bool = false) -> some View {
         ReviewSection(title: review.column.rawValue,
                       subtitle: subtitle(for: review),
                       isChecked: checkBinding(review.column),
+                      alwaysExpanded: alwaysExpanded,
                       needsAttention: openCount(review) > 0,
                       resolveCount: autoFixCount(review),
                       onResolve: { applyAutoFix(review) },
                       typeControl: review.kind == .derived ? nil : typeControl(for: review),
+                      onExpandChange: { expanded in setFocus(review.column, expanded) },
                       onDetail: { detailColumn = review.column },
+                      onExample: review.kind == .derived ? nil
+                        : { exampleColumn = review.column },
                       onConfigure: review.kind == .derived ? nil
                         : { configColumn = review.column },
                       onRegex: review.kind == .derived ? nil
@@ -852,13 +2831,16 @@ struct ContentView: View {
                     }
                 }
                 if type == .format {
-                    Section("형식") {
-                        ForEach(FormatPreset.allCases) { p in
-                            Button {
-                                setFormat(p, for: review.column)
-                            } label: {
-                                Label("\(p.rawValue)  \(p.hint)",
-                                      systemImage: p == effectiveFormat(review) ? "checkmark" : "circle")
+                    // 프리셋이 많아져 갈래별로 묶는다 — ‘연락처 > 이메일’처럼 찾게.
+                    ForEach(FormatPreset.Group.allCases) { g in
+                        Section(g.rawValue) {
+                            ForEach(g.members) { p in
+                                Button {
+                                    setFormat(p, for: review.column)
+                                } label: {
+                                    Label("\(p.rawValue)  \(p.hint)",
+                                          systemImage: p == effectiveFormat(review) ? "checkmark" : "circle")
+                                }
                             }
                         }
                     }
@@ -866,7 +2848,10 @@ struct ContentView: View {
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: type.symbol)
-                    Text(type == .format ? "포맷 · \(effectiveFormat(review).rawValue)" : type.rawValue)
+                    // 포맷이면 목표 예시까지 뱃지에 — 카드를 펴기 전에 보이도록.
+                    Text(type == .format
+                         ? "포맷 · \(effectiveFormat(review).rawValue) \(effectiveFormat(review).hint)"
+                         : type.rawValue)
                     if isAuto {
                         Text("자동").font(.caption2)
                             .foregroundStyle(tint.opacity(0.9))
@@ -895,56 +2880,62 @@ struct ContentView: View {
         }
     }
 
-    private var progressHeader: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("컬럼별 검토")
-                    .font(.title3.weight(.bold))
-                Text("각 컬럼의 값을 확인하고 ‘이대로 OK’를 체크하세요. 모두 체크하면 합칠 수 있어요.")
-                    .font(.body).foregroundStyle(.secondary)
-            }
-            Spacer()
-            VStack(alignment: .trailing, spacing: 6) {
-                Text("\(checked.intersection(visibleFinalColumns).count) / \(visibleFinalColumns.count) 완료")
-                    .font(.headline).monospacedDigit()
-                Button(allChecked ? "모두 해제" : "모두 이대로 OK") { toggleAll() }
-            }
-        }
-        .padding(.bottom, 4)
-    }
-
     private var reviewToolbar: some View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("검토").font(.title2.weight(.bold))
-                Text(canMerge
-                     ? "\(visibleFinalColumns.count)개 컬럼 · 결정 완료 — 합칠 준비가 됐어요"
-                     : "\(visibleFinalColumns.count)개 컬럼 · 결정할 일 \(openDecisions.count)건 남음")
+                Text(isPatching ? "검토 — 이번에 정제할 컬럼" : "검토")
+                    .font(.title2.weight(.bold))
+                Text(reviewSubtitle)
                     .font(.body).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
             if let errorMessage { errorLabel(errorMessage).frame(maxWidth: 300) }
-            Button("← 컬럼 고르기") { stage = .columns }
+            Button(isUtility ? "← 컬럼 고르기" : "← 컬럼 고르기") {
+                stage = isUtility ? .work : (isPatching ? .focus : .columns)
+            }
             Button {
-                refreshPreview()
-                openWindow(id: "preview")
+                openPreviewWindow()
             } label: {
-                Label("미리보기", systemImage: "macwindow.badge.plus")
+                Label("완성본 미리보기", systemImage: "macwindow.badge.plus")
             }
             .help("합쳐진 파일의 현재 상태를 별도 윈도우로 봅니다. 정리할수록 개선된 셀이 표시됩니다.")
             Button(action: runMerge) {
                 HStack {
                     if isRunning { ProgressView().controlSize(.small) }
-                    Text(isRunning ? "합치는 중…" : "이대로 합치기").fontWeight(.semibold)
+                    Text(isRunning ? (isPatching ? "정리하는 중…" : "합치는 중…")
+                                   : mergeButtonTitle)
+                        .fontWeight(.semibold)
                 }
             }
             .controlSize(.large)
             .buttonStyle(.borderedProminent)
-            .disabled(!canMerge || isRunning)
-            .help(canMerge ? "병합을 시작합니다"
-                           : "결정 TODO의 미해결 항목 \(openDecisions.count)건을 먼저 해결해야 합칠 수 있어요.")
+            .disabled(isRunning)
+            .help(openDecisions.isEmpty
+                  ? (isPatching ? "고른 컬럼의 값만 원본에 덮어씁니다. 나머지 컬럼은 그대로예요."
+                                : "병합을 시작합니다")
+                  : "아직 정리 안 한 값이 \(openDecisions.count)종 남아 있지만, 지금 가져가도 됩니다. 남은 값은 원본 그대로 나갑니다.")
         }
         .padding(20)
+    }
+
+    /// 가져가기 버튼 문구 — 유틸은 ‘고친 값 가져가기’, 통합은 ‘합치기’.
+    private var mergeButtonTitle: String {
+        if isUtility { return "고친 값 가져가기" }
+        return isPatching ? "이 컬럼만 원본에 반영" : "이대로 합치기"
+    }
+
+    /// 검토 화면 부제 — 어느 파일에 반영되는지, 아직 남은 게 몇 종인지.
+    /// 남아 있어도 막지 않는다. 알려 주기만 한다.
+    private var reviewSubtitle: String {
+        let state = openDecisions.isEmpty
+            ? "정리할 값 없음 — 언제든 가져갈 수 있어요"
+            : "아직 정리 안 한 값 \(openDecisions.count)종 (그대로 둬도 됩니다)"
+        if isPatching, let base {
+            return "‘\(base.name)’의 컬럼 \(visibleFinalColumns.count)개 · \(state)"
+                + " — 고르지 않은 컬럼은 원본 그대로 나갑니다."
+        }
+        return "\(visibleFinalColumns.count)개 컬럼 · \(state)"
     }
 
     // MARK: - Per-column review body
@@ -1052,7 +3043,9 @@ struct ContentView: View {
 
     @ViewBuilder
     private var resultStage: some View {
-        if let result {
+        if let patch, let base {
+            patchResultStage(patch, base: base)
+        } else if let result {
             VStack(spacing: 0) {
                 HStack(alignment: .top) {
                     summaryHeader(result)
@@ -1083,6 +3076,159 @@ struct ContentView: View {
             }
         } else {
             Color.clear.onAppear { stage = .review }
+        }
+    }
+
+    // MARK: - Stage 3b: 기존본에 이어붙인 결과
+
+    private func patchResultStage(_ patch: PatchResult, base: BaseSheet) -> some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .top) {
+                patchSummary(patch, base: base)
+                Spacer()
+                VStack(alignment: .trailing, spacing: 10) {
+                    HStack {
+                        Button("← 검토로") { stage = .review }
+                        if !patch.changes.isEmpty {
+                            Button(action: exportPatchChangeReport) {
+                                Label("변경 보고서…", systemImage: "doc.text.magnifyingglass")
+                            }
+                            .help("기존본의 어느 셀이 무엇에서 무엇으로 바뀌었는지 전부 CSV로 내보냅니다.")
+                        }
+                        Button(action: exportPatch) {
+                            Label(isUtility ? "정리된 파일 저장…" : "업데이트된 파일 내보내기…",
+                                  systemImage: "square.and.arrow.up")
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                    // 유틸 모드는 같은 파일을 제자리에서 고치므로 새 행이 생길 일이 없다.
+                    if !isUtility {
+                        Toggle("기존본에 없던 사람 맨 아래에 추가", isOn: $appendNewRows)
+                            .toggleStyle(.checkbox).font(.callout)
+                        Toggle("추가한 행에 ‘\(PatchEngine.markerValue)’ 표시 컬럼 넣기", isOn: $markNewRows)
+                            .toggleStyle(.checkbox).font(.callout)
+                            .disabled(!appendNewRows)
+                    }
+                    if let errorMessage { errorLabel(errorMessage).frame(maxWidth: 300) }
+                }
+            }
+            .padding(20)
+            .onChange(of: appendNewRows) { _ in recomputePatch() }
+            .onChange(of: markNewRows) { _ in recomputePatch() }
+            Divider()
+            patchTable(patch, base: base).padding(20)
+        }
+    }
+
+    private func patchSummary(_ patch: PatchResult, base: BaseSheet) -> some View {
+        let changedRows = patch.changedCells.count
+        let untouched = max(base.headers.count - patch.columns.count, 0)
+        return VStack(alignment: .leading, spacing: 12) {
+            Text(isUtility ? "‘\(base.name)’ 정리했어요" : "‘\(base.name)’에 반영했어요")
+                .font(.title3.weight(.bold))
+                .lineLimit(1).truncationMode(.middle)
+            HStack(spacing: 14) {
+                Stat(label: "전체 행", value: "\(base.rows.count)")
+                if isUtility {
+                    Stat(label: "값이 바뀐 행", value: "\(changedRows)")
+                } else {
+                    Stat(label: "값 반영", value: "\(patch.matchedRows)")
+                    Stat(label: "새로 추가", value: "\(patch.appendedRows)")
+                }
+                Stat(label: "바뀐 셀", value: "\(patch.changedCellCount)")
+            }
+            Text("이번에 정리한 컬럼: "
+                 + (patch.columns.isEmpty ? "없음"
+                    : patch.columns.map { $0.rawValue }.joined(separator: ", ")))
+                .font(.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if !patch.addedColumns.isEmpty {
+                Label("원본에 없어 새로 만든 컬럼 \(patch.addedColumns.count)개: "
+                      + patch.addedColumns.map { $0.rawValue }.joined(separator: ", "),
+                      systemImage: "plus.square.on.square")
+                    .font(.caption).foregroundStyle(Color.accentColor)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if patch.unmatchedRows > 0 {
+                Label("이번 데이터에서 짝을 못 찾은 기존 행 \(patch.unmatchedRows)건 — 손대지 않고 그대로 뒀어요.",
+                      systemImage: "questionmark.circle")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if patch.keptBlankCount > 0 {
+                Label("새 값이 비어 있어 기존 값을 지킨 셀 \(patch.keptBlankCount)건 — 값이 지워지는 일은 없습니다.",
+                      systemImage: "lock.shield")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Label(patch.changedCellCount == 0
+                  ? "바뀐 값 0건 — 원본이 그대로 유지됩니다."
+                  : "고르지 않은 컬럼 \(untouched)개와 모든 행은 한 글자도 건드리지 않았습니다.",
+                  systemImage: patch.changedCellCount == 0 ? "checkmark.seal.fill" : "checkmark.shield.fill")
+                .font(.callout.weight(.medium))
+                .foregroundStyle(patch.changedCellCount == 0 ? Color.green : Color.accentColor)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// 결과 표: 사람을 알아볼 컬럼 몇 개 + 이번에 반영한 컬럼.
+    /// 바뀐 셀은 파란 굵은 글씨, 새로 붙인 행은 초록 배경.
+    private func patchTable(_ patch: PatchResult, base: BaseSheet) -> some View {
+        var headers: [String] = []
+        for col in [UnifiedColumn.code, .koreanName, .email] {
+            if let h = base.columnHeader[col], !headers.contains(h) { headers.append(h) }
+        }
+        let idHeaders = headers
+        for col in patch.columns {
+            let h = base.columnHeader[col] ?? col.rawValue
+            if !headers.contains(h) { headers.append(h) }
+        }
+        let shown = Array(patch.rows.enumerated().prefix(300))
+        return ScrollView([.vertical, .horizontal]) {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 0) {
+                    ForEach(headers, id: \.self) { h in
+                        Text(h)
+                            .font(.caption.weight(.semibold))
+                            .lineLimit(1).truncationMode(.tail).help(h)
+                            .frame(width: idHeaders.contains(h) ? 150 : 180, alignment: .leading)
+                            .padding(.horizontal, 8).padding(.vertical, 6)
+                            .foregroundStyle(idHeaders.contains(h) ? Color.secondary : Color.accentColor)
+                    }
+                }
+                .background(Color(nsColor: .underPageBackgroundColor))
+
+                ForEach(shown, id: \.offset) { item in
+                    let changed = patch.changedCells[item.offset] ?? []
+                    let isNew = patch.newRowIndices.contains(item.offset)
+                    HStack(spacing: 0) {
+                        ForEach(headers, id: \.self) { h in
+                            let hit = changed.contains(h)
+                            Text(item.element[h] ?? "")
+                                .font(hit ? .caption.weight(.bold) : .caption)
+                                .foregroundStyle(hit ? Color.accentColor : Color.primary)
+                                .lineLimit(1).truncationMode(.tail)
+                                .frame(width: idHeaders.contains(h) ? 150 : 180, alignment: .leading)
+                                .padding(.horizontal, 8).padding(.vertical, 5)
+                        }
+                    }
+                    .background(isNew ? Color.green.opacity(0.10)
+                                      : (changed.isEmpty ? Color.clear : Color.accentColor.opacity(0.05)))
+                    Divider()
+                }
+            }
+        }
+        .overlay(alignment: .bottomLeading) {
+            HStack(spacing: 14) {
+                Label("파란 굵은 글씨 = 이번에 바뀐 셀", systemImage: "pencil")
+                Label("초록 행 = 새로 추가된 사람", systemImage: "plus.circle")
+                if patch.rows.count > 300 {
+                    Text("(앞 300행만 표시 · 전체 \(patch.rows.count)행)")
+                }
+            }
+            .font(.caption2).foregroundStyle(.secondary)
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .background(.regularMaterial, in: Capsule())
+            .padding(8)
         }
     }
 
@@ -1191,12 +3337,21 @@ struct ContentView: View {
         inputs.removeAll { $0.id == input.id }
     }
 
+    /// 여러 파일 합치기 화면에서 유틸 화면으로 되돌아간다.
+    private func backToWork() {
+        errorMessage = nil
+        stage = .work
+    }
+
     /// 이전 완성본을 참조 파일로 불러와, 그 헤더로 남길 컬럼을 맞춘다.
     /// 완성본의 헤더는 최종 스키마 컬럼명과 같으므로 이름으로 대응시킨다.
     /// 갈림길에서 ‘틀 있음’을 골랐을 때: 완성본을 불러오고, 성공하면 그 틀
     /// 구성이 곧 최종본이므로 컬럼 선택을 건너뛰고 바로 값 검토로 넘어간다.
     private func chooseTemplate() {
         guard loadReference() else { return }   // 취소·오류면 갈림길에 머무름
+        base = nil                              // 값 기준선 없이 틀만 쓰는 흐름
+        patch = nil
+        focusColumns = []
         columnMode = .withTemplate
         proceedToReview()
     }
@@ -1206,6 +3361,256 @@ struct ContentView: View {
         stage = .files
         columnMode = nil
     }
+
+    // MARK: - 유틸 모드 동작
+
+    private func pickWorkFiles() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.commaSeparatedText, .text, xlsxType]
+        panel.allowsMultipleSelection = true
+        panel.message = "합칠 파일을 모두 고르세요. 같은 이름의 컬럼끼리 맞춰 이어 붙입니다."
+        guard panel.runModal() == .OK else { return }
+        addWorkFiles(panel.urls)
+    }
+
+    private func acceptDroppedFiles(_ providers: [NSItemProvider]) -> Bool {
+        guard !providers.isEmpty else { return false }
+        let group = DispatchGroup()
+        var urls: [URL] = []
+        let lock = NSLock()
+        for provider in providers {
+            group.enter()
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier) { item, _ in
+                defer { group.leave() }
+                guard let data = item as? Data,
+                      let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
+                lock.lock(); urls.append(url); lock.unlock()
+            }
+        }
+        group.notify(queue: .main) {
+            // 떨어뜨린 순서는 보장되지 않으므로 이름순으로 정렬해 결과가 매번 같게 한다.
+            addWorkFiles(urls.sorted { $0.lastPathComponent < $1.lastPathComponent })
+        }
+        return true
+    }
+
+    /// 파일들을 유틸 모드로 더한다. 이미 있는 파일은 건너뛴다.
+    /// 올린 파일들이 곧 결과물의 기준선이라, 고친 컬럼만 제자리에 덮어써 돌려줄 수 있다.
+    private func addWorkFiles(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        var built = isUtility ? plans : []
+        let existing = Set(built.map { $0.url })
+        var failure: String?
+        for url in urls where !existing.contains(url) {
+            do { built.append(try PlanBuilder.passthrough(url: url)) }
+            catch { failure = "\(url.lastPathComponent): \(error.localizedDescription)"; break }
+        }
+        guard failure == nil else { errorMessage = failure; return }
+        guard !built.isEmpty else { return }
+        errorMessage = nil
+        adoptWorkPlans(built)
+    }
+
+    private func removeWorkFile(_ plan: FilePlan) {
+        let rest = plans.filter { $0.id != plan.id }
+        if rest.isEmpty {
+            resetWork()
+        } else {
+            adoptWorkPlans(rest)
+        }
+    }
+
+    /// 올린 파일 목록이 바뀔 때마다 컬럼·검토·기준선을 다시 계산한다.
+    private func adoptWorkPlans(_ built: [FilePlan]) {
+        plans = built
+        inputs = built.map { MergeInput(url: $0.url, channel: $0.channel) }
+        columnMode = .patchBase
+        patch = nil
+        result = nil
+        finalColumns = ColumnReviewBuilder.plainColumns(in: built)
+        reviews = ColumnReviewBuilder.plainReviews(in: built)
+        checked = []
+        valueMap = [:]
+        allowedValues = [:]
+        typeOverride = [:]
+        formatChoice = [:]
+        customFormat = [:]
+        seedValueMap(from: reviews)
+        if !baseIsUserFile {
+            base = BaseSheet.stacked(built, name: stackedName(built))
+        }
+        // 기본은 아무것도 안 고른 상태 — 제안 카드에서 하나씩 고르게 한다.
+        // (여러 개를 한 번에 하고 싶으면 목록을 펴서 직접 고르면 된다.)
+        focusColumns = []
+        showSettledColumns = false
+        showAllColumns = false
+        proposalIndex = 0
+        refreshMatches()
+        includedColumns = focusColumns
+        preview.reset()
+        stage = .work
+    }
+
+    private func stackedName(_ built: [FilePlan]) -> String {
+        built.count == 1 ? built[0].fileName : "합친 파일 \(built.count)개"
+    }
+
+    private func resetWork() {
+        plans = []; inputs = []; reviews = []; finalColumns = []
+        focusColumns = []; includedColumns = []; checked = []
+        showSettledColumns = false
+        stepOrder = []; openColumn = nil
+        valueMap = [:]; allowedValues = [:]
+        base = nil; baseIsUserFile = false; patch = nil; result = nil
+        preview.reset()
+        errorMessage = nil
+        stage = .work
+    }
+
+    private func clearUserBase() {
+        baseIsUserFile = false
+        matchColumn = nil
+        baseValues = [:]
+        baseCategorical = []
+        matchSuggestions = []
+        matchSamples = [:]
+        base = plans.isEmpty ? nil : BaseSheet.stacked(plans, name: stackedName(plans))
+        patch = nil
+    }
+
+    /// 고른 컬럼만 검토 대상으로 잡고 값 검토로.
+    private func startWork() {
+        includedColumns = focusColumns
+        checked = []
+        stepOrder = orderedReviewColumns
+        // 한 컬럼만 골랐으면 목록을 거치지 않고 바로 그 컬럼을 편다.
+        openColumn = focusColumns.count == 1 ? focusColumns.first : nil
+        stage = .review
+        preview.reset()
+        openPreviewWindow()
+    }
+
+    /// 지금 결정 상태로 만들어진 행들.
+    /// 유틸 모드는 올린 순서대로 이어 붙여 값만 적용하고, 아카데미 모드는 병합 엔진을 돌린다.
+    private func currentRows() -> (rows: [ApplicantRow], generatedCodes: Set<String>,
+                                   changes: [ChangeRecord], origins: [Int]) {
+        if isUtility {
+            let r = ValueApplier.run(plans: plans, valueMap: valueMap)
+            // 유틸은 올린 순서 그대로 이어 붙이므로 파일별 행 수로 출처를 만든다.
+            var origins: [Int] = []
+            for (i, p) in plans.enumerated() {
+                origins += Array(repeating: i, count: p.rows.count)
+            }
+            return (r.rows, [], r.changes, origins.count == r.rows.count ? origins : [])
+        }
+        let r = try? MergeEngine(plans: plans, valueMap: valueMap,
+                                 phoneTemplate: phoneTemplate).run()
+        return (r?.rows ?? [], r?.generatedCodes ?? [], r?.changes ?? [], r?.origins ?? [])
+    }
+
+    /// 올린 파일을 그대로 합치는 중이면 행 순서로, 따로 불러온 통합본에
+    /// 이어붙이는 중이면 Code→전화→이메일 키로 짝짓는다.
+    private var rowMatch: RowMatch {
+        if isUtility && !baseIsUserFile { return .position }
+        if let matchColumn { return .column(matchColumn) }
+        return .key
+    }
+
+    /// 짝짓기 기준으로 고를 수 있는 컬럼 — 기준 파일과 이번 데이터에 모두 있는 것.
+    private var matchColumnChoices: [UnifiedColumn] {
+        guard let base else { return [] }
+        let mine = Set(finalColumns)
+        return base.columns.filter { mine.contains($0) }
+    }
+
+    /// 기준 파일을 불러왔을 때 짝짓기 기준을 자동으로 고른다.
+    /// Code·전화·이메일이 있으면 그걸 쓰고(자동), 없으면 값이 겹치지 않는 컬럼 중 첫째.
+    private func autoMatchColumn(for sheet: BaseSheet) -> UnifiedColumn? {
+        let mine = Set(finalColumns)
+        for c in [UnifiedColumn.code, .phone, .email]
+        where sheet.columnHeader[c] != nil && mine.contains(c) { return nil }   // nil = 자동(키)
+        // 값이 행마다 고유한 컬럼이 곧 식별자다 (사번·주문번호·학번 …).
+        return sheet.columns.first { col in
+            guard mine.contains(col) else { return false }
+            var seen = Set<String>()
+            var filled = 0
+            for row in sheet.rows {
+                let v = sheet.value(col, in: row)
+                if v.isEmpty { continue }
+                filled += 1
+                if !seen.insert(v.lowercased()).inserted { return false }
+            }
+            return filled == sheet.rows.count
+        }
+    }
+
+    /// 지금 ‘기존 통합본에 이어붙이는’ 모드인가.
+    private var isPatching: Bool { base != nil && columnMode == .patchBase }
+
+    /// 만들던 통합본을 값까지 통째로 불러온다. 이 파일이 결과물의 기준선이 되고,
+    /// 고른 컬럼의 값만 여기에 덮어써진다 (행은 Code→전화→이메일로 짝지음).
+    private func chooseBase() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.commaSeparatedText, .text, xlsxType]
+        panel.allowsMultipleSelection = false
+        panel.message = "이어서 채울 통합본(만들던 파일)을 고르세요. 이번에 고친 컬럼만 이 파일에 덮어씁니다."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        loadBase(url)
+    }
+
+    /// 틀 칸에 파일을 끌어다 놓았을 때 — 합칠 파일이 아니라 ‘틀’로 받는다.
+    private func acceptBaseDrop(_ providers: [NSItemProvider]) -> Bool {
+        guard let provider = providers.first else { return false }
+        provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier) { item, _ in
+            guard let data = item as? Data,
+                  let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
+            DispatchQueue.main.async { loadBase(url) }
+        }
+        return true
+    }
+
+    /// 만들던 통합본·양식을 ‘틀’로 삼는다. 합칠 파일 목록은 건드리지 않는다.
+    private func loadBase(_ url: URL) {
+        do {
+            let sheet = try BaseSheetLoader.load(url: url)
+            errorMessage = nil
+            base = sheet
+            baseIsUserFile = true
+            matchColumn = autoMatchColumn(for: sheet)
+            indexBase()
+            refreshMatches()
+            patch = nil
+            result = nil
+            clearReference()
+            columnMode = .patchBase
+            if plans.isEmpty {
+                // 아직 합칠 파일이 없다 — 틀만 받아 두고 파일 올리기 화면에 머무른다.
+                focusColumns = []
+                includedColumns = []
+                stage = .work
+            } else if isUtility {
+                // 유틸 흐름에서는 첫 화면에 머무른다 — 파일과 컬럼만 정하면 되니까.
+                includedColumns = focusColumns
+                stage = .work
+            } else {
+                focusColumns = unresolvedColumns.intersection(Set(finalColumns))
+                stage = .focus
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// 고른 컬럼만 검토 대상으로 잡고 값 검토로 넘어간다.
+    private func proceedToFocusedReview() {
+        includedColumns = focusColumns
+        checked = []
+        stepOrder = orderedReviewColumns; openColumn = nil
+        stage = .review
+        preview.reset()
+        openPreviewWindow()
+    }
+
 
     /// 이전 완성본을 참조 파일로 불러온다. 성공하면 true.
     @discardableResult
@@ -1229,30 +3634,20 @@ struct ContentView: View {
         }
     }
 
-    /// 참조 헤더를 스키마 컬럼에 대응시켜 남길 컬럼을 설정한다. 대응된 컬럼은
-    /// (현재 파일에 값이 없어도) 참조와 같은 구성을 위해 그대로 포함한다.
+    /// 참조 파일의 헤더를 그대로 이번 결과물의 컬럼 구성으로 삼는다.
+    /// 헤더가 곧 컬럼이므로 ‘알아본 컬럼 / 못 알아본 헤더’ 구분은 더 이상 없다.
     @discardableResult
     private func applyReference(headers: [String], name: String) -> Bool {
-        let byName = Dictionary(UnifiedColumn.allCases.map {
-            ($0.rawValue.trimmingCharacters(in: .whitespacesAndNewlines), $0)
-        }, uniquingKeysWith: { first, _ in first })
-        var matched: Set<UnifiedColumn> = []
-        var unmatched: [String] = []
-        for h in headers {
-            let key = h.trimmingCharacters(in: .whitespacesAndNewlines)
-            if key.isEmpty { continue }
-            if let col = byName[key] { matched.insert(col) }
-            else { unmatched.append(h) }
-        }
+        let matched = headers.compactMap { UnifiedColumn(rawValue: $0) }
         guard !matched.isEmpty else {
-            errorMessage = "‘\(name)’에서 알아볼 수 있는 컬럼을 찾지 못했어요. 최종 결과물 형식의 파일인지 확인해 주세요."
+            errorMessage = "‘\(name)’에서 컬럼 이름(첫 줄)을 찾지 못했어요. 첫 줄이 머리글인 CSV/XLSX인지 확인해 주세요."
             return false
         }
         errorMessage = nil
         referenceName = name
-        referenceColumns = matched
-        referenceUnmatched = unmatched
-        includedColumns = matched      // 참조 구성에 맞춰 남길 컬럼을 재설정
+        referenceColumns = Set(matched)
+        referenceUnmatched = []
+        includedColumns = Set(matched)   // 참조 구성에 맞춰 남길 컬럼을 재설정
         return true
     }
 
@@ -1268,20 +3663,80 @@ struct ContentView: View {
                     if $0 {
                         checked.insert(col)
                         // OK할 때마다 ‘거기까지 완성된 파일’ 윈도우를 띄워 보여줍니다.
-                        refreshPreview()
-                        openWindow(id: "preview")
+                        openPreviewWindow()
                     } else {
                         checked.remove(col)
                     }
                 })
     }
 
+    /// 펼친 카드를 미리보기의 강조 대상으로 넘긴다. 다른 카드를 펼치면 그쪽으로
+    /// 옮겨가고, 접으면 (그 컬럼이 강조 중일 때만) 해제한다.
+    private func setFocus(_ col: UnifiedColumn, _ expanded: Bool) {
+        if expanded {
+            preview.focused = col
+        } else if preview.focused == col {
+            preview.focused = nil
+        }
+    }
+
     /// Rebuild the preview-window model from the current plans + valueMap.
     /// Same engine as the real merge, so the preview IS the future output.
     /// Diffs against the baseline (정리 전 병합본) to show what improved.
+    /// 미리보기 창에서 온 요청 처리 — 고른 컬럼 정리하러 가기 / 두 컬럼 합치기.
+    private func handlePreviewRequest(_ req: PreviewModel.PreviewRequest?) {
+        guard let req else { return }
+        preview.request = nil
+        switch req {
+        case .clean(let cols):
+            let valid = cols.filter { finalColumns.contains($0) }
+            guard !valid.isEmpty else { return }
+            focusColumns = Set(valid)
+            preview.selection = []
+            bringMainWindowToFront()
+            startWork()
+        case .merge(let a, let b):
+            mergeTwoColumns(a, b)
+            preview.selection = []
+            bringMainWindowToFront()
+        }
+    }
+
+    /// 고른 두 컬럼을 한 칸으로. 앞(왼쪽)에 있는 컬럼 이름이 남는다.
+    private func mergeTwoColumns(_ a: UnifiedColumn, _ b: UnifiedColumn) {
+        guard a != b,
+              let ia = finalColumns.firstIndex(of: a),
+              let ib = finalColumns.firstIndex(of: b) else { return }
+        let target = ia < ib ? a : b
+        let source = ia < ib ? b : a
+        applyMatches([(source: source, target: target)])
+    }
+
+    /// 미리보기 창에서 시작한 작업이라 메인 창을 앞으로 가져온다.
+    private func bringMainWindowToFront() {
+        NSApp.activate(ignoringOtherApps: true)
+        if let w = NSApp.windows.first(where: { $0.isVisible && $0.title != "완성본 미리보기" }) {
+            w.makeKeyAndOrderFront(nil)
+        }
+    }
+
+    /// 완성본 미리보기 창 열기 — 사용자가 직접 연 것임을 표시해 둔다.
+    private func openPreviewWindow() {
+        refreshPreview()
+        preview.openedByUser = true
+        openWindow(id: "preview")
+    }
+
     private func refreshPreview() {
-        let engine = MergeEngine(plans: plans, valueMap: valueMap, phoneTemplate: phoneTemplate)
-        let rows = (try? engine.run())?.rows ?? []
+        let current = currentRows()
+        let rows = current.rows
+
+        // 부분 정제·유틸 모드에서는 ‘합쳐진 새 파일’이 아니라
+        // ‘값이 덮어써진 원본’이 결과물이다.
+        if isPatching, let base {
+            refreshPatchPreview(base: base, rows: rows, generatedCodes: current.generatedCodes)
+            return
+        }
 
         if preview.baselineRows.isEmpty {
             // 기준선은 항상 기본 포맷 — 포맷 변경도 ‘개선’으로 표시되도록.
@@ -1297,11 +3752,126 @@ struct ContentView: View {
                 n += 1
             }
         }
+        // 컬럼별 ‘아직 할 일이 남았나’ — 검토 화면 뱃지와 같은 판정을 미리보기로 넘긴다.
+        var opens: [UnifiedColumn: Int] = [:]
+        var relevant: Set<UnifiedColumn> = []
+        // 컬럼을 아직 안 골랐어도(첫 화면) 색이 보이도록 전체 리뷰로 계산한다.
+        for r in reviews {
+            if isDecisionRelevant(r) { relevant.insert(r.column) }
+            let open = openCount(r)
+            if open > 0 { opens[r.column] = open }
+        }
+
         preview.rows = rows
         preview.diff = diff
         preview.diffCount = n
         preview.columns = cols
         preview.checked = checked
+        preview.openCounts = opens
+        preview.decisionColumns = relevant
+        preview.rowFiles = current.origins
+        preview.fileNames = plans.map(\.fileName)
+        sendColumnMarks()
+    }
+
+    /// 첫 화면에서 보이던 표시(쪼개진 컬럼·짝 후보·지금 보는 컬럼)를 미리보기 창으로 넘긴다.
+    private func sendColumnMarks() {
+        var split: Set<UnifiedColumn> = []
+        var hints: [UnifiedColumn: String] = [:]
+        for col in finalColumns where isSplitColumn(col) {
+            split.insert(col)
+            if let caption = splitCaption(col) { hints[col] = caption }
+        }
+        var owners: [UnifiedColumn: [Int]] = [:]
+        for col in finalColumns { owners[col] = columnOwnerIndices(col) }
+        preview.splitColumns = split
+        preview.pairHints = hints
+        preview.columnOwners = owners
+        // 컬럼을 고르는 중이면 지금 제안하는 컬럼을 강조해 둔다.
+        if stage == .work, openColumn == nil { preview.focused = currentProposalColumn }
+    }
+
+    /// 지금 선택·결정 상태로 기존본을 덮어쓴 결과를 만든다.
+    private func buildPatch(base: BaseSheet,
+                            rows: [ApplicantRow], generatedCodes: Set<String>) -> PatchResult {
+        PatchEngine.apply(base: base,
+                          merged: rows,
+                          generatedCodes: generatedCodes,
+                          columns: focusOrdered,
+                          appendNewRows: appendNewRows,
+                          markNewRows: markNewRows,
+                          match: rowMatch)
+    }
+
+    /// 이번에 정제하기로 한 컬럼 — 결과물의 컬럼 순서대로.
+    /// 고르지 않았어도 ‘정해 둔 규칙대로 다듬을 수 있는’ 컬럼은 함께 채운다
+    /// (판단이 필요 없는 컬럼까지 사람이 일일이 고르게 하지 않는다).
+    private var focusOrdered: [UnifiedColumn] {
+        let auto = autoFillSettled ? Set(autoEditableColumns) : []
+        return allColumns.filter { focusColumns.contains($0) || auto.contains($0) }
+    }
+
+    /// 부분 정제 모드의 미리보기: 기존본 그대로에, 이번 결정이 바꾸는 셀만 표시된다.
+    /// 비교 기준(baseline)이 손대기 전 기존본이라, 파란 셀이 곧 ‘이번 작업의 변경분’이다.
+    private func refreshPatchPreview(base: BaseSheet, rows sourceRows: [ApplicantRow],
+                                     generatedCodes: Set<String>) {
+        let p = buildPatch(base: base, rows: sourceRows, generatedCodes: generatedCodes)
+
+        var columnHeader = base.columnHeader
+        for c in p.addedColumns { columnHeader[c] = c.rawValue }
+        func toRow(_ r: [String: String]) -> ApplicantRow {
+            var out = ApplicantRow()
+            for (col, h) in columnHeader { out[col] = r[h] ?? "" }
+            return out
+        }
+
+        var cols = base.columns
+        for c in p.addedColumns where !cols.contains(c) { cols.append(c) }
+
+        let baseline = base.rows.map { base.applicantRow($0) }
+        let rows = p.rows.map(toRow)
+
+        var diff: [Int: Set<UnifiedColumn>] = [:]
+        var n = 0
+        for (i, row) in rows.enumerated() {
+            if i < baseline.count {
+                for c in cols where row[c] != baseline[i][c] {
+                    diff[i, default: []].insert(c); n += 1
+                }
+            } else {
+                // 새로 붙인 행: 이번에 채운 컬럼을 표시해 눈에 띄게 한다.
+                for c in p.columns where !row[c].isEmpty {
+                    diff[i, default: []].insert(c); n += 1
+                }
+            }
+        }
+
+        var opens: [UnifiedColumn: Int] = [:]
+        var relevant: Set<UnifiedColumn> = []
+        // 컬럼을 아직 안 골랐어도(첫 화면) 색이 보이도록 전체 리뷰로 계산한다.
+        for r in reviews {
+            if isDecisionRelevant(r) { relevant.insert(r.column) }
+            let open = openCount(r)
+            if open > 0 { opens[r.column] = open }
+        }
+
+        // 행마다 어느 파일에서 왔는지 — 큰 미리보기 창에서도 파일 색을 유지한다.
+        var origins = base.rowOrigins.count == base.rows.count ? base.rowOrigins : []
+        if !origins.isEmpty {
+            while origins.count < rows.count { origins.append(-1) }   // 새로 붙인 행
+        }
+        preview.rowFiles = origins
+        preview.fileNames = plans.map(\.fileName)
+        sendColumnMarks()
+
+        preview.baselineRows = baseline
+        preview.rows = rows
+        preview.diff = diff
+        preview.diffCount = n
+        preview.columns = cols
+        preview.checked = checked
+        preview.openCounts = opens
+        preview.decisionColumns = relevant
     }
 
     private func toggleAll() {
@@ -1347,6 +3917,9 @@ struct ContentView: View {
                 self.typeOverride = [:]
                 self.formatChoice = [:]
                 self.customFormat = [:]
+                self.base = nil
+                self.patch = nil
+                self.focusColumns = []
                 self.preview.reset()
                 self.seedValueMap(from: revs)
                 // 컬럼 기본 선택 정하기.
@@ -1372,8 +3945,8 @@ struct ContentView: View {
     private func proceedToReview() {
         checked = []
         stage = .review
-        refreshPreview()
-        openWindow(id: "preview")
+        preview.reset()          // 비교 기준선을 이 흐름에 맞게 다시 잡는다
+        openPreviewWindow()
     }
 
     // MARK: - Session save / resume (멈췄다 이어서 하기)
@@ -1387,13 +3960,23 @@ struct ContentView: View {
                 headers: p.headers,
                 rows: p.rows,
                 sources: Dictionary(uniqueKeysWithValues: p.sources.map { ($0.key.rawValue, $0.value) }),
-                separators: Dictionary(uniqueKeysWithValues: p.separators.map { ($0.key.rawValue, $0.value) }))
+                separators: Dictionary(uniqueKeysWithValues: p.separators.map { ($0.key.rawValue, $0.value) }),
+                passthrough: p.passthrough)
         }
         let stageStr: String
         switch stage {
+        case .work:    stageStr = "work"
         case .columns: stageStr = "columns"
+        case .focus:   stageStr = "focus"
         case .review:  stageStr = "review"
         default:       stageStr = "files"
+        }
+        let baseSnap = base.map { b in
+            SessionSnapshot.BaseSnapshot(
+                name: b.name, headers: b.headers, rows: b.rows,
+                columnHeader: Dictionary(uniqueKeysWithValues:
+                    b.columnHeader.map { ($0.key.rawValue, $0.value) }),
+                rowOrigins: b.rowOrigins)
         }
         return SessionSnapshot(
             savedAt: Date(),
@@ -1409,7 +3992,12 @@ struct ContentView: View {
             referenceName: referenceName,
             referenceColumns: referenceColumns.map { $0.rawValue },
             referenceUnmatched: referenceUnmatched,
-            files: files)
+            files: files,
+            columnMode: columnMode?.rawValue,
+            focusColumns: focusColumns.map { $0.rawValue },
+            base: baseSnap,
+            baseIsUserFile: baseIsUserFile,
+            matchColumn: matchColumn?.rawValue)
     }
 
     /// 변경이 잦아도 0.8초 뒤 한 번만 저장 (디바운스).
@@ -1440,12 +4028,17 @@ struct ContentView: View {
             return FilePlan(url: URL(fileURLWithPath: f.path),
                             channel: Channel(rawValue: f.channel) ?? .simple,
                             headers: f.headers, rows: f.rows,
-                            sources: sources, separators: seps)
+                            sources: sources, separators: seps,
+                            passthrough: f.passthrough ?? false)
         }
         plans = restored
         inputs = restored.map { MergeInput(url: $0.url, channel: $0.channel) }
-        finalColumns = ColumnReviewBuilder.finalColumns(in: restored)
-        reviews = ColumnReviewBuilder.reviews(in: restored)
+        // 유틸 모드로 저장된 세션은 파일 그대로의 컬럼으로 되살린다.
+        let utility = restored.count == 1 && restored[0].passthrough
+        finalColumns = utility ? ColumnReviewBuilder.plainColumns(in: restored)
+                               : ColumnReviewBuilder.finalColumns(in: restored)
+        reviews = utility ? ColumnReviewBuilder.plainReviews(in: restored)
+                          : ColumnReviewBuilder.reviews(in: restored)
         phoneTemplate = s.phoneTemplate
         includedColumns = Set(s.includedColumns.compactMap(col))
         checked = Set(s.checked.compactMap(col))
@@ -1468,23 +4061,42 @@ struct ContentView: View {
         referenceName = s.referenceName
         referenceColumns = Set(s.referenceColumns.compactMap(col))
         referenceUnmatched = s.referenceUnmatched
+        base = s.base.map { b in
+            BaseSheet(name: b.name, headers: b.headers, rows: b.rows,
+                      columnHeader: Dictionary(uniqueKeysWithValues:
+                        b.columnHeader.compactMap { kv in col(kv.key).map { ($0, kv.value) } }),
+                      rowOrigins: b.rowOrigins ?? [])
+        }
+        focusColumns = Set((s.focusColumns ?? []).compactMap(col))
+        baseIsUserFile = (s.baseIsUserFile ?? false) && base != nil
+        matchColumn = s.matchColumn.flatMap(col)
+        indexBase()
+        refreshMatches()
+        patch = nil
         resumable = nil
         preview.reset()
         errorMessage = nil
 
-        // 복원 시에는 이미 갈림길을 지나 컬럼을 고른 상태이므로, 참조 유무로
-        // 모드를 되살려 갈림길 화면을 다시 띄우지 않는다.
-        columnMode = referenceColumns.isEmpty ? .fromScratch : .withTemplate
+        // 복원 시에는 이미 갈림길을 지난 상태이므로 갈림길 화면을 다시 띄우지 않는다.
+        if let saved = s.columnMode.flatMap(ColumnMode.init(rawValue:)) {
+            columnMode = saved
+        } else {
+            columnMode = referenceColumns.isEmpty ? .fromScratch : .withTemplate
+        }
+        if columnMode == .patchBase && base == nil { columnMode = nil }
 
         switch s.stage {
         case "review":
             stage = .review
-            refreshPreview()
-            openWindow(id: "preview")
+            openPreviewWindow()
+        case "focus":
+            stage = base == nil ? .columns : .focus
         case "columns":
             stage = .columns
+        case "work":
+            stage = .work
         default:
-            stage = .files
+            stage = utility ? .work : .files
         }
     }
 
@@ -1505,12 +4117,34 @@ struct ContentView: View {
     private func runMerge() {
         errorMessage = nil
         isRunning = true
-        let engine = MergeEngine(plans: plans, valueMap: valueMap, phoneTemplate: phoneTemplate)
+        let baseSheet = isPatching ? base : nil
+        let cols = focusOrdered
+        let append = appendNewRows, mark = markNewRows, match = rowMatch
+        let utility = isUtility
+        let allPlans = plans
+        let map = valueMap
+        let template = phoneTemplate
         DispatchQueue.global(qos: .userInitiated).async {
             do {
-                let r = try engine.run()
+                let r: MergeResult
+                if utility {
+                    // 유틸 모드: 올린 순서 그대로 이어 붙이고 값 통일만 적용한다.
+                    let applied = ValueApplier.run(plans: allPlans, valueMap: map)
+                    r = MergeResult(rows: applied.rows, counts: [:], duplicatePairs: 0,
+                                    keepCount: 0, removeCount: 0, unmatchedNoPhone: 0,
+                                    changes: applied.changes)
+                } else {
+                    r = try MergeEngine(plans: allPlans, valueMap: map,
+                                        phoneTemplate: template).run()
+                }
+                let p = baseSheet.map {
+                    PatchEngine.apply(base: $0, merged: r.rows, generatedCodes: r.generatedCodes,
+                                      columns: cols, appendNewRows: append, markNewRows: mark,
+                                      match: match)
+                }
                 DispatchQueue.main.async {
                     self.result = r
+                    self.patch = p
                     self.isRunning = false
                     self.stage = .result
                 }
@@ -1521,6 +4155,16 @@ struct ContentView: View {
                 }
             }
         }
+    }
+
+    /// 결과 화면에서 ‘신규 행’ 옵션을 바꾸면 이어붙이기를 다시 계산한다.
+    private func recomputePatch() {
+        guard let base, let result else { return }
+        patch = PatchEngine.apply(base: base, merged: result.rows,
+                                  generatedCodes: result.generatedCodes,
+                                  columns: focusOrdered,
+                                  appendNewRows: appendNewRows, markNewRows: markNewRows,
+                                  match: rowMatch)
     }
 
     private func exportResult() {
@@ -1535,6 +4179,41 @@ struct ContentView: View {
                 // 최종 내보내기를 마쳤으면 이어서 하기용 세션은 정리.
                 SessionStore.clear()
                 resumable = nil
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    /// 이번 컬럼을 덮어쓴 기존본을 통째로 내보낸다. 헤더도 값도 원본 구성 그대로라
+    /// 다음번에 이 파일을 다시 불러와 그다음 컬럼을 이어서 정제하면 된다.
+    private func exportPatch() {
+        guard let patch, let base else { return }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.commaSeparatedText]
+        let stem = (base.name as NSString).deletingPathExtension
+        panel.nameFieldStringValue = isUtility ? "\(stem)_정리.csv" : "\(stem)_업데이트.csv"
+        panel.message = "기존 파일을 덮어쓰지 않도록 새 이름으로 저장하는 걸 권합니다."
+        if panel.runModal() == .OK, let url = panel.url {
+            do {
+                try Exporter.writePatch(patch, to: url)
+                SessionStore.clear()
+                resumable = nil
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    /// 기존본의 어느 셀이 바뀌었는지 전체 내역.
+    private func exportPatchChangeReport() {
+        guard let patch else { return }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.commaSeparatedText]
+        panel.nameFieldStringValue = "변경보고서.csv"
+        if panel.runModal() == .OK, let url = panel.url {
+            do {
+                try Exporter.writeChanges(patch.changes, to: url)
             } catch {
                 errorMessage = error.localizedDescription
             }
@@ -1561,10 +4240,6 @@ struct ContentView: View {
 
 private let xlsxType = UTType(filenameExtension: "xlsx") ?? .data
 
-extension UnifiedColumn: Identifiable {
-    public var id: String { rawValue }
-}
-
 /// Full-detail viewer for one column: every distinct value with counts,
 /// the unified value (if any), searchable and selectable.
 struct ColumnDetailView: View {
@@ -1580,6 +4255,7 @@ struct ColumnDetailView: View {
     @State private var sort: ValueSort = .countDesc
     @State private var changedOnly = false
     @State private var expandRaw = true        // 로우데이터: 행을 합치지 않고 전부 펼침
+    @State private var didPickInitialSort = false   // 첫 정렬만 자동 지정 (그다음은 사용자 몫)
 
     /// The list to show: every source row (raw) or one row per distinct value.
     private var base: [DistinctValue] { expandRaw ? rawValues : values }
@@ -1818,6 +4494,13 @@ struct ColumnDetailView: View {
             }
         }
         .frame(width: showsSource ? 1020 : 800, height: 580)
+        // 점검 필요(⚠️)한 값이 있으면 그걸 맨 위로 놓고 연다. 정렬 메뉴는 그대로라
+        // 사용자가 건수순 등으로 바꾸면 그 선택이 유지된다.
+        .onAppear {
+            guard !didPickInitialSort else { return }
+            didPickInitialSort = true
+            if !anomalyReasons.isEmpty { sort = .anomalyFirst }
+        }
     }
 }
 
@@ -1872,6 +4555,8 @@ struct ReviewSection<Content: View>: View {
     let title: String
     let subtitle: String
     @Binding var isChecked: Bool
+    /// 한 번에 한 컬럼씩 진행할 때 — 카드를 접지 않고 늘 펼쳐 둔다.
+    var alwaysExpanded: Bool = false
     /// ⚠️ 아직 결정이 필요한가 — 접힌 카드에서 강조 테두리로 눈에 띄게.
     var needsAttention: Bool = false
     /// 추천값으로 한 번에 고칠 수 있는 값의 종 수 (0이면 자동 해결 버튼 숨김).
@@ -1880,7 +4565,11 @@ struct ReviewSection<Content: View>: View {
     var onResolve: (() -> Void)? = nil
     /// 헤더에 표시할 컬럼 타입 선택 메뉴 (파생 컬럼은 nil).
     var typeControl: AnyView? = nil
+    /// 카드를 펼치거나 접을 때 알려 준다 — 미리보기에서 그 열을 강조하기 위해.
+    var onExpandChange: ((Bool) -> Void)? = nil
     var onDetail: (() -> Void)? = nil
+    /// 예시 몇 개로 규칙을 찾아 주는 시트 — 가장 쉬운 길이라 액션 줄 맨 앞에 둔다.
+    var onExample: (() -> Void)? = nil
     var onConfigure: (() -> Void)? = nil
     var onRegex: (() -> Void)? = nil
     var onMapping: (() -> Void)? = nil
@@ -1889,8 +4578,11 @@ struct ReviewSection<Content: View>: View {
     /// 접힘/펼침 — 기본은 접힘. 결정 항목을 큰 카드로 먼저 훑고 하나씩 펼친다.
     @State private var isExpanded = false
 
+    private var expanded: Bool { alwaysExpanded || isExpanded }
+
     private var hasActions: Bool {
-        onDetail != nil || onConfigure != nil || onRegex != nil || onMapping != nil
+        onDetail != nil || onExample != nil || onConfigure != nil
+            || onRegex != nil || onMapping != nil
     }
 
     private var accentColor: Color {
@@ -1900,7 +4592,7 @@ struct ReviewSection<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            if isExpanded && !isChecked {
+            if expanded && !isChecked {
                 Divider().padding(.vertical, 4)
                 bodyContent
             }
@@ -1918,6 +4610,10 @@ struct ReviewSection<Content: View>: View {
                                                       : Color.primary.opacity(0.06),
                         lineWidth: needsAttention && !isChecked ? 1.5 : 1)
         )
+        // 펼친 카드가 곧 ‘지금 만지고 있는 컬럼’이다.
+        .onChange(of: isExpanded) { open in onExpandChange?((open || alwaysExpanded) && !isChecked) }
+        .onAppear { if alwaysExpanded { onExpandChange?(!isChecked) } }
+        .onDisappear { if expanded { onExpandChange?(false) } }
     }
 
     // 접힌 상태에서도 항상 보이는 헤더 — 누르면 펼쳐진다.
@@ -1930,11 +4626,12 @@ struct ReviewSection<Content: View>: View {
 
             // 왼쪽 영역 전체가 펼침 토글 버튼 (체크박스는 별도).
             Button {
+                guard !alwaysExpanded else { return }   // 한 컬럼씩 모드에선 접히지 않는다
                 withAnimation(.easeInOut(duration: 0.18)) { isExpanded.toggle() }
             } label: {
                 HStack(alignment: .center, spacing: 10) {
                     Image(systemName: isChecked ? "checkmark.circle.fill"
-                                                : (isExpanded ? "chevron.down" : "chevron.right"))
+                                                : (expanded ? "chevron.down" : "chevron.right"))
                         .font(.body.weight(.semibold))
                         .foregroundStyle(isChecked ? Color.green : Color.secondary)
                         .frame(width: 18)
@@ -1959,7 +4656,7 @@ struct ReviewSection<Content: View>: View {
             if isChecked {
                 Label("완료", systemImage: "checkmark.circle.fill")
                     .font(.subheadline.weight(.medium)).foregroundStyle(.green)
-            } else if !isExpanded {
+            } else if !expanded {
                 if resolveCount > 0, let onResolve {
                     // 추천값이 있으면 펼치지 않고도 한 번에 실제로 고친다.
                     Button {
@@ -1984,6 +4681,8 @@ struct ReviewSection<Content: View>: View {
                 .font(.body)
                 .fixedSize()
         }
+        // 카드는 조용하게 — 체크 표시가 바뀔 때만 살짝 페이드.
+        .animation(.easeInOut(duration: 0.18), value: isChecked)
     }
 
     // 펼쳤을 때만 만들어지는 편집 본문 (액션 버튼 + content).
@@ -1991,6 +4690,13 @@ struct ReviewSection<Content: View>: View {
         VStack(alignment: .leading, spacing: 0) {
             if hasActions {
                 HStack(spacing: 8) {
+                    if let onExample {
+                        Button(action: onExample) {
+                            Label("예시로 고치기", systemImage: "wand.and.stars")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .help("‘서울특별시 → 서울’처럼 바꾸고 싶은 예를 두어 개 적으면, 같은 규칙이 걸리는 나머지 값까지 찾아 줍니다. 정규식을 몰라도 됩니다.")
+                    }
                     if let onDetail {
                         Button(action: onDetail) {
                             Label("값 살펴보기", systemImage: "list.bullet.rectangle")
@@ -2050,6 +4756,16 @@ struct ValueUnifyBody: View {
         }
     }
 
+    /// 화면을 열 때 ⚠️(허용 목록 밖)였던 값들 — 목록 맨 위로 올려 둔다.
+    /// 고르는 즉시 줄이 아래로 튀지 않도록 순서는 열 때 한 번만 정한다.
+    @State private var raisedFirst: Set<String> = []
+
+    private var ordered: [DistinctValue] {
+        guard !raisedFirst.isEmpty else { return values }
+        return values.filter { raisedFirst.contains($0.value) }
+             + values.filter { !raisedFirst.contains($0.value) }
+    }
+
     var body: some View {
         let groupCount = Set(values.map { mapping[$0.value] ?? $0.value }).count
         VStack(alignment: .leading, spacing: 8) {
@@ -2089,7 +4805,7 @@ struct ValueUnifyBody: View {
             }
             .font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
 
-            ForEach(values) { dv in
+            ForEach(ordered) { dv in
                 let canonical = mapping[dv.value] ?? dv.value
                 let changed = canonical != dv.value
                 let inSet = allowed.isEmpty || allowed.contains(canonical)
@@ -2145,8 +4861,11 @@ struct ValueUnifyBody: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .padding(.vertical, 1)
+                .background(inSet ? Color.clear : Color.orange.opacity(0.05))
             }
         }
+        .onAppear { raisedFirst = Set(outOfSetValues.map(\.value)) }
     }
 }
 
@@ -2188,13 +4907,28 @@ struct ProposalsBody: View {
         failedRows.filter { (mapping[$0.value] ?? $0.value) == $0.value }.count
     }
 
+    /// 화면을 열 때 ⚠️였던 값들 — 목록 맨 위로 올려 둔다.
+    /// 타이핑할 때마다 순서가 바뀌면 고치던 줄이 눈앞에서 사라지므로,
+    /// 순서는 열 때 한 번만 정하고 고친 뒤에도 그 자리에 남긴다(심볼만 초록으로).
+    @State private var raisedFirst: Set<String> = []
+
+    private func freezeRaisedOrder() {
+        raisedFirst = Set(failedRows
+            .filter { (mapping[$0.value] ?? $0.value) == $0.value }
+            .map(\.value))
+    }
+
     private var visible: [ProposedChange] {
+        let rows: [ProposedChange]
         switch filter {
-        case .all:     return proposals
-        case .changed: return changedRows
-        case .same:    return sameRows
-        case .failed:  return failedRows
+        case .all:     rows = proposals
+        case .changed: rows = changedRows
+        case .same:    rows = sameRows
+        case .failed:  rows = failedRows
         }
+        guard !raisedFirst.isEmpty else { return rows }
+        return rows.filter { raisedFirst.contains($0.value) }
+             + rows.filter { !raisedFirst.contains($0.value) }
     }
 
     var body: some View {
@@ -2203,6 +4937,8 @@ struct ProposalsBody: View {
                 Text(note).font(.subheadline).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+
+            targetBanner    // 맨 위: 모든 값을 어떤 모양으로 맞출 것인가
 
             // 제안 요약: 무엇이 몇 종 바뀌는지 한 줄로 명시
             HStack(spacing: 12) {
@@ -2227,35 +4963,6 @@ struct ProposalsBody: View {
             }
             .font(.body.weight(.medium))
 
-            // 목표 포맷: 프리셋 메뉴 + 직접 입력 (샘플 번호를 원하는 모양으로)
-            if let phoneTemplate {
-                HStack(spacing: 8) {
-                    Text("목표 포맷").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
-                    Menu {
-                        ForEach(Normalizer.PhoneFormat.allCases) { f in
-                            Button(f.rawValue) { phoneTemplate.wrappedValue = f.rawValue }
-                        }
-                    } label: {
-                        Label("자주 쓰는 형식", systemImage: "textformat.123")
-                    }
-                    .fixedSize()
-                    TextField("예: +82 10-1234-5678", text: phoneTemplate)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.body.monospaced())
-                        .frame(width: 230)
-                        .help("샘플 번호 010-1234-5678이 원하는 모양으로 보이게 적으세요. 구분 기호는 자유입니다.")
-                    if templateValid {
-                        Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                            .help("모든 번호가 이 모양으로 통일됩니다.")
-                    } else {
-                        Label("샘플 숫자(01012345678 또는 8210…)가 그대로 들어 있어야 해요",
-                              systemImage: "exclamationmark.triangle.fill")
-                            .font(.caption).foregroundStyle(.orange)
-                    }
-                    Spacer()
-                }
-            }
-
             if visible.isEmpty {
                 Text("해당하는 값이 없습니다.")
                     .font(.body).foregroundStyle(.secondary)
@@ -2272,6 +4979,58 @@ struct ProposalsBody: View {
                 }
             }
         }
+        .onAppear(perform: freezeRaisedOrder)
+    }
+
+    /// 목표 포맷 배너 — 값 목록보다 먼저, ‘무엇으로 맞출 것인가’부터 보여준다.
+    /// 전화번호는 여기서 바로 목표 모양을 고르거나 직접 적을 수 있다.
+    private var targetBanner: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: "target").foregroundStyle(Color.accentColor)
+                Text("목표 포맷").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                Text(targetLabel)
+                    .font(.body.monospaced().weight(.semibold))
+                    .foregroundStyle(Color.accentColor)
+                    .padding(.horizontal, 7).padding(.vertical, 2)
+                    .background(RoundedRectangle(cornerRadius: 5)
+                        .fill(Color.accentColor.opacity(0.12)))
+                if let phoneTemplate {
+                    Menu {
+                        ForEach(Normalizer.PhoneFormat.allCases) { f in
+                            Button(f.rawValue) { phoneTemplate.wrappedValue = f.rawValue }
+                        }
+                    } label: {
+                        Label("자주 쓰는 형식", systemImage: "textformat.123")
+                    }
+                    .fixedSize()
+                    TextField("예: +82 10-1234-5678", text: phoneTemplate)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.body.monospaced())
+                        .frame(width: 230)
+                        .help("샘플 번호 010-1234-5678이 원하는 모양으로 보이게 적으세요. 구분 기호는 자유입니다.")
+                    if templateValid {
+                        Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                            .help("모든 번호가 이 모양으로 통일됩니다.")
+                    }
+                }
+                Spacer()
+            }
+            if let t = phoneTemplate?.wrappedValue, !templateValid {
+                Label("샘플 숫자(01012345678 또는 8210…)가 그대로 들어 있어야 해요 — 지금: \(t)",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption).foregroundStyle(.orange)
+            } else {
+                Text(phoneTemplate == nil
+                     ? "모든 값을 이 날짜 표기로 바꿉니다. 인식 못 한 값만 아래에서 직접 고치세요."
+                     : "모든 번호를 이 모양으로 통일합니다. 표준으로 못 바꾼 값만 아래에서 직접 고치세요.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.accentColor.opacity(0.06)))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.accentColor.opacity(0.25), lineWidth: 1))
     }
 
     @ViewBuilder
@@ -2462,8 +5221,7 @@ struct FormatBody: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            header
-            if isCustom { customField }
+            targetBanner            // 맨 위: 이 컬럼이 도달해야 할 모양
             if patternValid {
                 if failures.isEmpty {
                     Label("모든 값이 형식에 맞습니다 (\(values.count)종).",
@@ -2479,20 +5237,45 @@ struct FormatBody: View {
         }
     }
 
-    private var header: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "textformat.123").foregroundStyle(Color.accentColor)
-            Text("형식: \(preset.rawValue)")
-                .font(.body.weight(.medium))
-            Text(isCustom ? (pattern.isEmpty ? "정규식 미입력" : pattern) : preset.hint)
-                .font(.callout.monospaced()).foregroundStyle(.secondary)
-                .lineLimit(1).truncationMode(.middle)
-            Spacer()
-            if patternValid {
-                Text("맞음 \(okCount) · 안 맞음 \(failures.count)")
-                    .font(.callout.monospacedDigit()).foregroundStyle(.secondary)
+    /// 목표 형식 배너 — 이름·예시를 크게, 정규식은 아래 작게. 값 목록보다 먼저
+    /// 오도록 본문 맨 위에 둔다 (무엇에 맞추는지가 먼저 보여야 한다).
+    private var targetBanner: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: "target").foregroundStyle(Color.accentColor)
+                Text("목표 형식").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                Text(preset.rawValue).font(.body.weight(.semibold))
+                if !isCustom {
+                    Text(preset.hint)
+                        .font(.body.monospaced().weight(.medium))
+                        .foregroundStyle(Color.accentColor)
+                        .padding(.horizontal, 7).padding(.vertical, 2)
+                        .background(RoundedRectangle(cornerRadius: 5)
+                            .fill(Color.accentColor.opacity(0.12)))
+                }
+                Spacer()
+                if patternValid {
+                    Text("맞음 \(okCount) · 안 맞음 \(failures.count)")
+                        .font(.callout.monospacedDigit())
+                        .foregroundStyle(failures.isEmpty ? Color.green : Color.orange)
+                }
+            }
+            if isCustom {
+                customField
+            } else {
+                HStack(spacing: 6) {
+                    Text(preset.about).font(.caption).foregroundStyle(.secondary)
+                    Text(pattern)
+                        .font(.caption.monospaced()).foregroundStyle(.tertiary)
+                        .lineLimit(1).truncationMode(.middle)
+                        .help("이 컬럼의 값은 전체가 이 정규식과 맞아야 통과합니다: \(pattern)")
+                }
             }
         }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.accentColor.opacity(0.06)))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.accentColor.opacity(0.25), lineWidth: 1))
     }
 
     private var customField: some View {
@@ -3288,6 +6071,48 @@ struct ColumnSourceSheet: View {
 
 // MARK: - Preview window (합쳐진 파일 미리보기)
 
+/// 미리보기에서 컬럼 머리글에 색으로 드러내는 ‘이 컬럼 작업이 끝났나’ 상태.
+/// 검토 화면의 뱃지(⚠️ 결정 필요 / ✅ 확정 / ✅ 해결됨)와 같은 판정을 쓴다.
+enum ColumnWorkStatus {
+    case needsWork(Int)   // 아직 결정하지 못한 값이 N종 남음
+    case confirmed        // 사용자가 ‘이대로 확정’까지 체크함
+    case resolved         // 결정거리는 있었지만 다 해결됨 (확정 전)
+    case nothingToDo      // 애초에 판단할 게 없던 컬럼 (파생·처음부터 깨끗함)
+
+    var needsWork: Bool { if case .needsWork = self { return true }; return false }
+
+    var icon: String {
+        switch self {
+        case .needsWork:   return "exclamationmark.triangle.fill"
+        case .confirmed:   return "checkmark.circle.fill"
+        case .resolved:    return "checkmark.circle"
+        case .nothingToDo: return "minus.circle"
+        }
+    }
+    var tint: Color {
+        switch self {
+        case .needsWork:            return .orange
+        case .confirmed, .resolved: return .green
+        case .nothingToDo:          return .secondary
+        }
+    }
+    /// 머리글 이름 옆에 붙는 남은 건수 (해결된 컬럼엔 없음).
+    var badge: String? {
+        if case .needsWork(let n) = self { return "\(n)" }
+        return nil
+    }
+    var help: String {
+        switch self {
+        case .needsWork(let n): return "더 작업이 필요해요 — 아직 결정하지 못한 값 \(n)종"
+        case .confirmed:        return "작업 완료 — ‘이대로 확정’까지 체크한 컬럼"
+        case .resolved:         return "남은 결정 없음 — 아직 ‘이대로 확정’은 누르지 않았어요"
+        case .nothingToDo:      return "손댈 값이 없던 컬럼"
+        }
+    }
+
+
+}
+
 /// Shared state for the standalone preview window. ContentView writes into it
 /// on every cleaning action; the window observes and re-renders live.
 final class PreviewModel: ObservableObject {
@@ -3299,10 +6124,94 @@ final class PreviewModel: ObservableObject {
     @Published var diffCount = 0
     @Published var columns: [UnifiedColumn] = []
     @Published var checked: Set<UnifiedColumn> = []
+    // 지금 검토 카드를 펼쳐 놓은 컬럼 — 미리보기에서 그 열을 강조해,
+    // ‘확정’을 누르기 전에도 어느 셀을 만지고 있는지 보이게 한다.
+    @Published var focused: UnifiedColumn?
+    // 컬럼별 미해결 결정 종 수 (0이면 키 없음) — 검토 화면의 openCount와 같은 값.
+    @Published var openCounts: [UnifiedColumn: Int] = [:]
+    // 사람이 판단할 거리가 있었던 컬럼들 — ‘해결됨’과 ‘볼 것도 없었음’을 가른다.
+    @Published var decisionColumns: Set<UnifiedColumn> = []
+    // 행마다 어느 파일에서 왔는지 (-1 = 이번에 새로 붙인 행). 비어 있으면 색 표시 안 함.
+    @Published var rowFiles: [Int] = []
+    @Published var fileNames: [String] = []
+    // 아직 한 칸으로 합쳐지지 않은 컬럼(일부 파일에만 있음)과 그 짝 후보.
+    @Published var splitColumns: Set<UnifiedColumn> = []
+    @Published var pairHints: [UnifiedColumn: String] = [:]
+    // 컬럼마다 어느 파일에 들어 있는지 (파일 순번) — 열 배경색·점 표시에 쓴다.
+    @Published var columnOwners: [UnifiedColumn: [Int]] = [:]
+    // 미리보기 창에서 고른 컬럼과, 메인 창에 보내는 요청.
+    @Published var selection: Set<UnifiedColumn> = []
+    @Published var request: PreviewRequest?
+
+    /// 미리보기 창이 메인 창에 시키는 일.
+    enum PreviewRequest: Equatable {
+        case clean([UnifiedColumn])                 // 고른 컬럼 정리하러 가기
+        case merge(UnifiedColumn, UnifiedColumn)    // 두 컬럼을 한 칸으로
+    }
+
+    /// 사용자가 ‘완성본 미리보기’ 버튼을 눌러 연 창인가.
+    /// 앱을 켤 때 시스템이 창을 복원해도 이 값이 false면 스스로 닫는다.
+    var openedByUser = false
+
+    /// 올린 순서대로 도는 파일 색 — 첫 화면 파일 칩·미리보기가 같은 색을 쓴다.
+    static let filePalette: [Color] = [.blue, .green, .orange, .purple, .pink, .teal]
+    static func paletteColor(_ index: Int) -> Color {
+        filePalette[((index % filePalette.count) + filePalette.count) % filePalette.count]
+    }
+
+    /// 한 파일에서만 온 컬럼이면 그 파일 색 — 열 배경으로 출처를 보여 준다.
+    func ownerTint(_ c: UnifiedColumn) -> Color? {
+        guard fileNames.count > 1, let o = columnOwners[c], o.count == 1, o[0] >= 0 else { return nil }
+        return Self.paletteColor(o[0])
+    }
+
+    /// 이 행이 온 파일의 색 (모르면 nil).
+    func fileTint(row i: Int) -> Color? {
+        guard i < rowFiles.count else { return nil }
+        let f = rowFiles[i]
+        return f >= 0 ? Self.paletteColor(f) : nil
+    }
+
+    func fileLabel(row i: Int) -> String {
+        guard i < rowFiles.count else { return "" }
+        let f = rowFiles[i]
+        guard f >= 0 else { return "새 행" }
+        return f < fileNames.count ? fileNames[f] : "파일 \(f + 1)"
+    }
+
+    /// ‘이대로 확정’이 미해결보다 앞선다 — 검토 화면의 isResolved(체크했으면 끝)와
+    /// 같은 순서라, 미리보기에서 초록인데 병합이 막히는 일이 없다.
+    func status(_ c: UnifiedColumn) -> ColumnWorkStatus {
+        if checked.contains(c) { return .confirmed }
+        if let n = openCounts[c], n > 0 { return .needsWork(n) }
+        return decisionColumns.contains(c) ? .resolved : .nothingToDo
+    }
+
+    var needsWorkColumns: [UnifiedColumn] { columns.filter { status($0).needsWork } }
+    var confirmedColumns: [UnifiedColumn] { columns.filter { checked.contains($0) } }
+
+    /// 셀 한 칸의 배경색. 컬럼 상태가 열 전체로 내려와 세로줄로 읽히게 합니다.
+    /// 확정한 컬럼은 사람이 손봐서 끝낸 열이므로 초록으로 채웁니다.
+    func cellTint(_ c: UnifiedColumn, improved: Bool) -> Color {
+        switch status(c) {
+        case .confirmed:            return .green.opacity(improved ? 0.16 : 0.10)
+        case .needsWork:            return .orange.opacity(improved ? 0.12 : 0.06)
+        case .resolved, .nothingToDo:
+            if improved { return .accentColor.opacity(0.10) }
+            // 한 파일에서만 온 컬럼은 그 파일 색으로 — 어디서 온 열인지 배경으로 보이게.
+            if let t = ownerTint(c) { return t.opacity(0.07) }
+            return splitColumns.contains(c) ? .orange.opacity(0.05) : .clear
+        }
+    }
 
     func reset() {
         rows = []; baselineRows = []; diff = [:]; diffCount = 0
         columns = []; checked = []
+        rowFiles = []; fileNames = []
+        splitColumns = []; pairHints = [:]; columnOwners = [:]
+        selection = []; request = nil
+        openCounts = [:]; decisionColumns = []
+        focused = nil
     }
 }
 
@@ -3313,6 +6222,9 @@ struct PreviewWindowView: View {
     @ObservedObject var model = PreviewModel.shared
     @State private var query = ""
     @State private var improvedOnly = false
+    /// 파일 색·컬럼 상태 색을 켤지 (기본 켬, 설정에 기억).
+    @AppStorage("previewShowColors") private var showColors = true
+    @Environment(\.dismiss) private var dismiss
 
     /// (원본 행 번호, 행) — 검색·필터를 거쳐도 diff/이전값 조회용 인덱스 유지.
     private var visibleRows: [(Int, ApplicantRow)] {
@@ -3328,38 +6240,79 @@ struct PreviewWindowView: View {
         return rows
     }
 
+    /// 창 위쪽 줄 — 요약·선택 동작·보기 옵션. (한 덩어리로 두면 타입 체크가 버거워
+    /// 조각으로 나눠 둔다.)
+    private var windowToolbar: some View {
+        HStack(spacing: 10) {
+            Label("완성본 미리보기", systemImage: "eye")
+                .font(.headline)
+            if model.rows.isEmpty {
+                Text("파일을 올리고 ‘완성본 미리보기’를 누르면 채워집니다.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+            } else {
+                summaryChips
+            }
+            Spacer()
+            selectionActions
+            if !model.rows.isEmpty { viewOptions }
+        }
+        .padding(.horizontal, 16).padding(.vertical, 10)
+    }
+
+    @ViewBuilder
+    private var summaryChips: some View {
+        Text("전체 \(model.rows.count)행"
+             + (visibleRows.count == model.rows.count ? "" : " 중 \(visibleRows.count)행 표시")
+             + " · OK \(model.checked.count)/\(model.columns.count)컬럼")
+            .font(.subheadline).foregroundStyle(.secondary)
+        if model.needsWorkColumns.isEmpty {
+            Label("모든 컬럼 작업 완료", systemImage: "checkmark.seal.fill")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(Color.green)
+                .help("결정할 값이 남은 컬럼이 없습니다.")
+        } else {
+            Label("작업 필요 \(model.needsWorkColumns.count)컬럼",
+                  systemImage: "exclamationmark.triangle.fill")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(Color.orange)
+                .help("아직 결정하지 못한 값이 남은 컬럼: "
+                      + model.needsWorkColumns.map(\.rawValue).joined(separator: ", "))
+        }
+        if model.diffCount > 0 {
+            Label("개선된 셀 \(model.diffCount)개", systemImage: "sparkles")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(Color.accentColor)
+                .help("정리 전과 비교해 값이 좋아진 셀 수입니다.")
+        }
+        if let f = model.focused {
+            Label("보는 중: \(f.rawValue)", systemImage: "eye.fill")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(Color.accentColor)
+                .lineLimit(1)
+                .padding(.horizontal, 8).padding(.vertical, 3)
+                .background(Capsule().fill(Color.accentColor.opacity(0.14)))
+                .help("표에서 파란 기둥으로 표시된 컬럼입니다.")
+        }
+    }
+
+    @ViewBuilder
+    private var viewOptions: some View {
+        Toggle(isOn: $showColors) { Text("색 표시") }
+            .toggleStyle(.checkbox)
+            .fixedSize()
+            .help("파일 색·컬럼 상태 색을 켜고 끕니다.")
+        Toggle(isOn: $improvedOnly) { Text("개선된 행만") }
+            .toggleStyle(.checkbox)
+            .fixedSize()
+            .help("정리로 값이 바뀐 행만 봅니다.")
+        TextField("값 검색…", text: $query)
+            .textFieldStyle(.roundedBorder)
+            .frame(width: 180)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                Label("합쳐진 파일 미리보기", systemImage: "eye")
-                    .font(.headline)
-                if model.rows.isEmpty {
-                    Text("파일을 추가하고 ‘컬럼 검토’로 이동하면 채워집니다.")
-                        .font(.subheadline).foregroundStyle(.secondary)
-                } else {
-                    Text("전체 \(model.rows.count)행"
-                         + (visibleRows.count == model.rows.count ? "" : " 중 \(visibleRows.count)행 표시")
-                         + " · OK \(model.checked.count)/\(model.columns.count)컬럼")
-                        .font(.subheadline).foregroundStyle(.secondary)
-                    if model.diffCount > 0 {
-                        Label("개선된 셀 \(model.diffCount)개", systemImage: "sparkles")
-                            .font(.subheadline.weight(.medium))
-                            .foregroundStyle(Color.accentColor)
-                            .help("정리 전 병합본과 비교해 값이 좋아진 셀 수입니다. 표에서 파란 배경으로 표시됩니다.")
-                    }
-                }
-                Spacer()
-                if !model.rows.isEmpty {
-                    Toggle(isOn: $improvedOnly) { Text("개선된 행만") }
-                        .toggleStyle(.checkbox)
-                        .fixedSize()
-                        .help("정리로 값이 바뀐 행만 봅니다.")
-                    TextField("값 검색…", text: $query)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 200)
-                }
-            }
-            .padding(.horizontal, 16).padding(.vertical, 10)
+            windowToolbar
 
             Divider()
 
@@ -3376,47 +6329,292 @@ struct PreviewWindowView: View {
                         Section {
                             ForEach(visibleRows, id: \.1.id) { i, row in
                                 HStack(spacing: 0) {
+                                    rowHeadCell(i)
                                     ForEach(model.columns, id: \.self) { c in
-                                        let improved = model.diff[i]?.contains(c) ?? false
-                                        Text(row[c])
-                                            .font(.subheadline)
-                                            .fontWeight(improved ? .medium : .regular)
-                                            .foregroundStyle(improved ? Color.accentColor : .primary)
-                                            .lineLimit(1).truncationMode(.tail)
-                                            .frame(width: 150, alignment: .leading)
-                                            .padding(.horizontal, 8).padding(.vertical, 4)
-                                            .background(improved ? Color.accentColor.opacity(0.10) : .clear)
-                                            .help(improved
-                                                  ? "개선됨\n이전: \(i < model.baselineRows.count ? model.baselineRows[i][c] : "")\n이후: \(row[c])"
-                                                  : row[c])
+                                        bodyCell(c, row: row, at: i)
                                     }
                                 }
+                                .background(showColors ? (model.fileTint(row: i)?.opacity(0.08) ?? .clear) : .clear)
                                 Divider()
                             }
                         } header: {
                             HStack(spacing: 0) {
-                                ForEach(model.columns, id: \.self) { c in
-                                    HStack(spacing: 4) {
-                                        Image(systemName: model.checked.contains(c)
-                                              ? "checkmark.circle.fill" : "circle.dotted")
-                                            .font(.caption)
-                                            .foregroundStyle(model.checked.contains(c) ? Color.green : Color.secondary)
-                                        Text(c.rawValue)
-                                            .font(.subheadline.weight(.semibold))
-                                            .lineLimit(1).truncationMode(.tail)
-                                    }
-                                    .frame(width: 150, alignment: .leading)
+                                Text(model.rowFiles.isEmpty ? "행" : "행 · 파일")
+                                    .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                                    .frame(width: model.rowFiles.isEmpty ? 56 : 150, alignment: .leading)
                                     .padding(.horizontal, 8).padding(.vertical, 6)
-                                    .help(c.rawValue + (model.checked.contains(c) ? " — 검토 완료" : " — 검토 전"))
+                                ForEach(Array(model.columns.enumerated()), id: \.element) { idx, c in
+                                    headerCell(c, number: idx + 1)
                                 }
                             }
                             .background(Color(nsColor: .underPageBackgroundColor))
                         }
                     }
                 }
+                Divider()
+                legendBar
             }
         }
         .frame(minWidth: 720, minHeight: 420)
+        // 앱을 켤 때 저절로 뜨는(복원되는) 창은 닫는다 — 버튼으로 열었을 때만 남는다.
+        .onAppear { if !model.openedByUser { dismiss() } }
+    }
+
+    /// 표의 셀 한 칸. 컬럼 상태가 배경으로 내려오고, 개선된 값은 파란 굵은 글씨,
+    /// 지금 보는 열은 좌우 세로선으로 기둥처럼 이어진다.
+    private func bodyCell(_ c: UnifiedColumn, row: ApplicantRow, at i: Int) -> some View {
+        let improved = model.diff[i]?.contains(c) ?? false
+        let focused = model.focused == c
+        let picked = model.selection.contains(c)
+        let value = row[c]
+        let fg: Color = improved ? .accentColor
+            : (value.isEmpty ? Color.secondary.opacity(0.5) : .primary)
+        return Text(value.isEmpty ? "—" : value)
+            .font(.subheadline)
+            .fontWeight(improved ? .medium : .regular)
+            .foregroundStyle(fg)
+            .lineLimit(1).truncationMode(.tail)
+            .frame(width: 190, alignment: .leading)
+            .padding(.horizontal, 8).padding(.vertical, 4)
+            .background(showColors ? model.cellTint(c, improved: improved) : .clear)
+            .background(picked ? Color.accentColor.opacity(0.07) : .clear)
+            .background(focused ? Color.accentColor.opacity(0.12) : .clear)
+            .overlay(alignment: .leading) { focusEdge(focused) }
+            .overlay(alignment: .trailing) { focusEdge(focused) }
+            .help(improved
+                  ? "개선됨\n이전: \(i < model.baselineRows.count ? model.baselineRows[i][c] : "")\n이후: \(value)"
+                  : value)
+    }
+
+    /// 행 맨 앞 칸 — 행 번호와, 어느 파일에서 온 줄인지 색·이름으로.
+    private func rowHeadCell(_ i: Int) -> some View {
+        let tint = showColors ? model.fileTint(row: i) : nil
+        let hasFiles = !model.rowFiles.isEmpty
+        return HStack(spacing: 5) {
+            Text("\(i + 1)")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 34, alignment: .trailing)
+            if hasFiles {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(tint ?? Color.secondary.opacity(0.35))
+                    .frame(width: 3, height: 14)
+                Text(model.fileLabel(row: i))
+                    .font(.caption)
+                    .foregroundStyle(tint ?? .secondary)
+                    .lineLimit(1).truncationMode(.middle)
+            }
+        }
+        .frame(width: hasFiles ? 150 : 56, alignment: .leading)
+        .padding(.horizontal, 8).padding(.vertical, 4)
+        .background((tint ?? Color.clear).opacity(tint == nil ? 0 : 0.12))
+        .help(hasFiles ? "\(i + 1)행 · \(model.fileLabel(row: i))" : "\(i + 1)행")
+    }
+
+    /// 검토 중인 열의 좌우 세로선. 셀마다 그려도 위아래로 이어져 한 줄로 보인다.
+    @ViewBuilder
+    private func focusEdge(_ on: Bool) -> some View {
+        if on {
+            Rectangle().fill(Color.accentColor).frame(width: 2)
+        }
+    }
+
+    /// 컬럼 머리글 한 칸 — 상태 아이콘 + 이름 + 남은 건수, 그리고 상태색 밑줄.
+    /// 머리글은 스크롤해도 고정이라 여기 색이 곧 그 컬럼의 상태 표시가 된다.
+    private func headerCell(_ c: UnifiedColumn, number: Int) -> some View {
+        let st = model.status(c)
+        let isFocused = model.focused == c
+        let split = model.splitColumns.contains(c)
+        let picked = model.selection.contains(c)
+        return VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 4) {
+                Button {
+                    if picked { model.selection.remove(c) } else { model.selection.insert(c) }
+                } label: {
+                    Image(systemName: picked ? "checkmark.square.fill" : "square")
+                        .foregroundStyle(picked ? Color.accentColor : Color.secondary.opacity(0.6))
+                }
+                .buttonStyle(.plain)
+                .help("이 컬럼 고르기 — 고른 뒤 ‘데이터 정리하기’나 ‘두 컬럼 합치기’를 누르세요.")
+                Text("\(number)")
+                    .font(.caption2.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(minWidth: 16, alignment: .trailing)
+                Image(systemName: st.icon)
+                    .font(.caption)
+                    .foregroundStyle(showColors ? st.tint : .secondary)
+                Text(c.rawValue)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(showColors && split ? Color.orange : .primary)
+                    .lineLimit(1).truncationMode(.tail)
+                if let badge = st.badge {
+                    Text(badge)
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(Color.orange)
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(Capsule().fill(Color.orange.opacity(0.20)))
+                }
+            }
+            // 아직 한 칸으로 안 합쳐진 컬럼 — 인라인 미리보기와 같은 둘째 줄.
+            if isFocused {
+                Text("지금 볼 컬럼")
+                    .font(.caption2).foregroundStyle(Color.accentColor)
+                    .padding(.leading, 20)
+            } else if let hint = model.pairHints[c] {
+                HStack(spacing: 4) {
+                    ownerDots(c)
+                    Text(hint)
+                        .font(.caption2).foregroundStyle(split ? .orange : .secondary)
+                        .lineLimit(1).truncationMode(.tail)
+                }
+                .padding(.leading, 20)
+            } else if model.fileNames.count > 1, !(model.columnOwners[c] ?? []).isEmpty {
+                HStack(spacing: 4) {
+                    ownerDots(c)
+                    Text("모든 파일에 있음")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                .padding(.leading, 20)
+            }
+        }
+        .frame(width: 190, height: 34, alignment: .leading)
+        .padding(.horizontal, 8).padding(.vertical, 6)
+        .overlay(alignment: .top) {
+            if picked { Rectangle().fill(Color.accentColor).frame(height: 3) }
+        }
+        // 머리글도 아래 셀들과 같은 색 계열로 — 열 전체가 한 덩어리로 읽히게.
+        .background(showColors ? headerTint(c, st) : Color.clear)
+        .background(isFocused ? Color.accentColor.opacity(0.18) : .clear)
+        .overlay(alignment: .leading) { focusEdge(isFocused) }
+        .overlay(alignment: .trailing) { focusEdge(isFocused) }
+        .overlay(alignment: .top) {
+            // 검토 중인 열은 위쪽에도 선을 그어 머리부터 끝까지 한 기둥으로 보이게.
+            if isFocused { Rectangle().fill(Color.accentColor).frame(height: 2) }
+        }
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(isFocused ? Color.accentColor : st.tint.opacity(st.needsWork ? 0.9 : 0.40))
+                .frame(height: 2)
+        }
+        .help("\(c.rawValue) — \(st.help)"
+              + (isFocused ? "\n지금 검토 중인 컬럼입니다." : ""))
+    }
+
+    /// 컬럼을 고르면 나타나는 동작들 — 정리하러 가기 / 두 컬럼 합치기.
+    @ViewBuilder
+    private var selectionActions: some View {
+        if !model.selection.isEmpty {
+            Text("\(model.selection.count)개 선택")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(Color.accentColor)
+            if model.selection.count == 2 {
+                Button { requestMerge() } label: {
+                    Label("두 컬럼 합치기", systemImage: "arrow.trianglehead.merge")
+                }
+                .help("고른 두 컬럼을 한 칸으로 합칩니다. 앞에 있는 컬럼 이름이 남아요.")
+            }
+            Button { requestClean() } label: {
+                Label("데이터 정리하기", systemImage: "wand.and.stars")
+            }
+            .buttonStyle(.borderedProminent)
+            .help("고른 컬럼의 값 형식을 통일하러 갑니다.")
+            Button("선택 해제") { model.selection = [] }
+                .controlSize(.small)
+        } else if !model.rows.isEmpty {
+            Text("컬럼 이름 옆 네모를 체크하면 정리·합치기를 할 수 있어요")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func requestClean() {
+        let cols = model.columns.filter { model.selection.contains($0) }
+        guard !cols.isEmpty else { return }
+        model.request = .clean(cols)
+    }
+
+    private func requestMerge() {
+        let two = model.columns.filter { model.selection.contains($0) }
+        guard two.count == 2 else { return }
+        model.request = .merge(two[0], two[1])
+    }
+
+    /// 머리글 배경 — 상태색이 먼저, 그다음 ‘어느 파일에서 온 열인지’ 색.
+    private func headerTint(_ c: UnifiedColumn, _ st: ColumnWorkStatus) -> Color {
+        if st.needsWork { return .orange.opacity(0.14) }
+        if model.checked.contains(c) { return .green.opacity(0.14) }
+        if let t = model.ownerTint(c) { return t.opacity(0.16) }
+        return model.splitColumns.contains(c) ? .orange.opacity(0.08) : .clear
+    }
+
+    /// 이 컬럼이 어느 파일에 있는지 점으로 — 있는 파일은 그 색, 없으면 빈 동그라미.
+    private func ownerDots(_ c: UnifiedColumn) -> some View {
+        let owners = Set(model.columnOwners[c] ?? [])
+        return HStack(spacing: 2) {
+            ForEach(model.fileNames.indices, id: \.self) { i in
+                Circle()
+                    .fill(owners.contains(i) ? PreviewModel.paletteColor(i) : Color.clear)
+                    .overlay(Circle().stroke(owners.contains(i) ? Color.clear
+                                             : Color.secondary.opacity(0.5), lineWidth: 1))
+                    .frame(width: 6, height: 6)
+                    .help(model.fileNames[i] + (owners.contains(i) ? "에 있음" : "엔 없음"))
+            }
+        }
+    }
+
+    /// 색이 뭘 뜻하는지 한 줄로 — 미리보기를 따로 띄워 보는 창이라 범례가 필요하다.
+    private var legendBar: some View {
+        VStack(alignment: .leading, spacing: 4) {
+        if !model.fileNames.isEmpty && !model.rowFiles.isEmpty {
+            HStack(spacing: 12) {
+                Text("파일 색").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                ForEach(Array(model.fileNames.enumerated()), id: \.offset) { idx, name in
+                    HStack(spacing: 4) {
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(PreviewModel.paletteColor(idx)).frame(width: 10, height: 10)
+                        Text(name).font(.caption).foregroundStyle(.secondary)
+                            .lineLimit(1).truncationMode(.middle)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+        }
+        HStack(spacing: 14) {
+            legendItem("exclamationmark.triangle.fill", .orange, "더 작업 필요")
+            legendItem("checkmark.circle.fill", .green, "확정 완료")
+            legendItem("checkmark.circle", .green, "남은 결정 없음")
+            legendItem("minus.circle", .secondary, "손댈 값 없음")
+            legendItem("rectangle.portrait.and.arrow.right", .accentColor, "검토 중인 열")
+            if !model.splitColumns.isEmpty {
+                legendItem("square.dashed", .orange, "아직 안 합쳐진 컬럼")
+            }
+            if model.fileNames.count > 1 {
+                HStack(spacing: 4) {
+                    Circle().fill(Color.secondary.opacity(0.35)).frame(width: 8, height: 8)
+                    Text("열 배경·점 = 그 컬럼이 들어 있는 파일")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            HStack(spacing: 4) {
+                Text("—").font(.caption).foregroundStyle(.secondary.opacity(0.6))
+                Text("그 파일엔 없는 값").font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            HStack(spacing: 4) {
+                Text("가").font(.caption.weight(.medium)).foregroundStyle(Color.accentColor)
+                Text("파란 굵은 글씨 = 값이 개선된 셀")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        }
+        .padding(.horizontal, 16).padding(.vertical, 6)
+        .background(Color(nsColor: .underPageBackgroundColor))
+    }
+
+    private func legendItem(_ icon: String, _ tint: Color, _ label: String) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: icon).font(.caption2).foregroundStyle(tint)
+            Text(label).font(.caption).foregroundStyle(.secondary)
+        }
     }
 }
 

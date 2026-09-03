@@ -21,6 +21,12 @@ struct MergeResult {
     var removeCount: Int
     var unmatchedNoPhone: Int       // rows with no usable phone key
     var changes: [ChangeRecord] = []  // every cell the merge modified (audit trail)
+    /// 각 행이 몇 번째로 올린 파일에서 왔는지 — 미리보기에서 파일마다 색을 달리 쓰기 위한 것.
+    /// 중복 표시는 행을 지우지 않고 표시만 하므로 순서·개수가 그대로 유지된다.
+    var origins: [Int] = []
+    /// 도구가 만들어 낸 Unique ID(6F1…) 목록. 원본에 Code가 있던 행과 구분해야
+    /// 기존 통합본에 이어붙일 때 번호가 밀린 코드로 엉뚱한 짝을 짓지 않는다.
+    var generatedCodes: Set<String> = []
 }
 
 /// One source file to merge, with its auto-detected channel.
@@ -48,9 +54,10 @@ struct MergeEngine {
         var rows: [ApplicantRow] = []
         var counts: [Channel: Int] = [:]
         var changes: [ChangeRecord] = []
+        var origins: [Int] = []
 
         // ---- Step 1: ingest every file into the unified schema ----
-        for plan in plans {
+        for (fileIndex, plan) in plans.enumerated() {
             var usable = Array(plan.rows.enumerated())
             // 일반지원: only rows that reached "Submitted" are real applications.
             if plan.channel == .general, plan.headers.contains(ChannelMapping.generalStatusColumn) {
@@ -61,15 +68,19 @@ struct MergeEngine {
             }
             let mapped = usable.map { map($0.element, index: $0.offset, using: plan, changes: &changes) }
             rows += mapped
+            origins += Array(repeating: fileIndex, count: mapped.count)
             counts[plan.channel, default: 0] += mapped.count
         }
 
         // ---- Step 1b: 간편지원 Unique ID 부여 (spec Step 2-2: 6F1 + 일련번호) ----
         // Code가 없는 행에 파일 순서대로 6F10001, 6F10002… 를 채운다.
         var serial = 0
+        var generatedCodes = Set<String>()
         for i in rows.indices where rows[i][.code].isEmpty {
             serial += 1
-            rows[i][.code] = String(format: "6F1%04d", serial)
+            let code = String(format: "6F1%04d", serial)
+            rows[i][.code] = code
+            generatedCodes.insert(code)
         }
 
         // ---- Step 2: dedup across channels by cleaned phone key ----
@@ -81,7 +92,9 @@ struct MergeEngine {
             keepCount: result.keep,
             removeCount: result.remove,
             unmatchedNoPhone: result.noPhone,
-            changes: changes
+            changes: changes,
+            origins: result.rows.count == origins.count ? origins : [],
+            generatedCodes: generatedCodes
         )
     }
 

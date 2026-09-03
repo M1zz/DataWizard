@@ -22,6 +22,15 @@ struct SessionSnapshot: Codable {
     var referenceColumns: [String]
     var referenceUnmatched: [String]
     var files: [FileSnapshot]
+    // 부분 정제(기존 통합본에 이어붙이기) 상태 — 옵셔널이라 이전 버전 세션도 그대로 열린다.
+    var columnMode: String?                  // "withTemplate" | "fromScratch" | "patchBase"
+    var focusColumns: [String]?              // 이번에 정제하기로 고른 컬럼
+    var base: BaseSnapshot?                  // 기준으로 삼은 기존 통합본 (값까지)
+    /// 그 기준본이 사용자가 직접 고른 ‘틀’인가 (아니면 올린 파일을 이어 붙인 시트).
+    /// 옵셔널 — 이전 버전 세션은 false로 열린다.
+    var baseIsUserFile: Bool?
+    /// 틀과 이번 데이터를 짝지을 컬럼 (nil이면 Code→전화→이메일 자동).
+    var matchColumn: String?
 
     struct FileSnapshot: Codable {
         var path: String
@@ -30,15 +39,33 @@ struct SessionSnapshot: Codable {
         var rows: [[String: String]]
         var sources: [String: [String]]      // UnifiedColumn.rawValue → source headers
         var separators: [String: String]
+        /// 유틸 모드(파일 하나 그대로 고치기)로 만든 계획인가. 옵셔널 — 이전 세션도 열린다.
+        var passthrough: Bool?
+    }
+
+    /// 기존 통합본을 값까지 통째로 저장 — 원본 파일에 다시 접근하지 않아도
+    /// 이어붙이기 작업을 그대로 복원할 수 있게.
+    struct BaseSnapshot: Codable {
+        var name: String
+        var headers: [String]
+        var rows: [[String: String]]
+        var columnHeader: [String: String]   // 컬럼 이름 → 파일의 헤더 문자열
+        /// 행마다 몇 번째 파일에서 왔는지 (미리보기 색). 옵셔널 — 이전 세션도 열린다.
+        var rowOrigins: [Int]?
     }
 
     /// Short human summary for the resume card.
     var summary: String {
         let stageName: String
         switch stage {
+        case "work":    stageName = "컬럼 고르기"
         case "columns": stageName = "컬럼 고르기"
+        case "focus":   stageName = "정제할 컬럼 고르기"
         case "review":  stageName = "값 검토"
         default:        stageName = "파일 추가"
+        }
+        if let base {
+            return "파일 \(files.count)개 · 기존본 ‘\(base.name)’에 이어붙이기 · \(stageName) 단계"
         }
         return "파일 \(files.count)개 · \(stageName) 단계"
     }

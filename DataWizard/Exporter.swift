@@ -6,12 +6,11 @@ enum Exporter {
     /// Build the export string. When `excludeRemoved` is true, rows flagged
     /// "중복 - 삭제" are omitted entirely (an active-only roster).
     ///
-    /// `columns` decides which unified columns are written, in the given order —
-    /// the user picks these in the ‘최종 컬럼 고르기’ 단계. When nil, the full
-    /// 73-column schema is written (backward-compatible default).
+    /// `columns` decides which unified columns are written, in the given order.
+    /// 고정 스키마가 없어졌으므로 순서는 언제나 호출하는 쪽이 정한다.
     static func makeCSV(from result: MergeResult, excludeRemoved: Bool,
-                        columns: [UnifiedColumn]? = nil) -> String {
-        let cols = columns ?? UnifiedColumn.allCases
+                        columns: [UnifiedColumn]) -> String {
+        let cols = columns
         let headers = cols.map { $0.rawValue }
         var rows: [[String]] = []
         for row in result.rows {
@@ -23,9 +22,20 @@ enum Exporter {
 
     /// Write the CSV to disk at the given URL.
     static func write(_ result: MergeResult, to url: URL, excludeRemoved: Bool,
-                      columns: [UnifiedColumn]? = nil) throws {
+                      columns: [UnifiedColumn]) throws {
         let csv = makeCSV(from: result, excludeRemoved: excludeRemoved, columns: columns)
         try csv.data(using: .utf8)?.write(to: url)
+    }
+
+    /// 기존 통합본에 이번 컬럼만 덮어쓴 결과를 그대로 내보낸다.
+    /// 헤더도 값도 원본 파일 구성을 유지하므로, 스키마 밖 컬럼(수기 입력·후속 작업)이
+    /// 살아 있는 채로 이어서 작업할 수 있다.
+    static func makePatchCSV(_ patch: PatchResult) -> String {
+        CSVParser.write(headers: patch.headers, rows: PatchEngine.table(patch))
+    }
+
+    static func writePatch(_ patch: PatchResult, to url: URL) throws {
+        try makePatchCSV(patch).data(using: .utf8)?.write(to: url)
     }
 
     /// Write the verification report: every cell the merge changed, one line per

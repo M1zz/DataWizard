@@ -14,6 +14,9 @@ struct FilePlan: Identifiable {
     var rows: [[String: String]]                // every parsed row, header-keyed
     var sources: [UnifiedColumn: [String]]      // unified field -> ordered source columns
     var separators: [UnifiedColumn: String]     // join string between combined sources ("")
+    /// 파일 하나를 그대로 고치는 유틸 모드에서 만든 계획인가.
+    /// true면 아카데미 전용 보정(‘그 외 국가’ 치환 등)을 건너뛰고 값을 있는 그대로 읽는다.
+    var passthrough = false
 
     var fileName: String { url.lastPathComponent }
 
@@ -65,7 +68,7 @@ struct FilePlan: Identifiable {
 
         // 간편지원 국가: ‘그 외 국가’를 고르면 실제 국가명 컬럼의 값으로 치환해
         // 최종본처럼 진짜 국가명이 남도록 한다 (값 통일에서 영문으로 정리 가능).
-        if col == .country, channel == .simple, joined == "그 외 국가" {
+        if col == .country, channel == .simple, !passthrough, joined == "그 외 국가" {
             let name = (row[ChannelMapping.simpleCountryNameColumn] ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if !name.isEmpty { return name }
@@ -169,6 +172,24 @@ enum PlanBuilder {
 
         return FilePlan(url: url, channel: channel, headers: headers, rows: rows,
                         sources: sources, separators: [:])
+    }
+
+    /// 파일 하나를 있는 그대로 다루는 계획 — 헤더가 곧 컬럼이고, 값은 변형 없이 읽는다.
+    /// 유틸 모드(‘고칠 파일 + 고칠 컬럼’)의 출발점.
+    static func passthrough(url: URL) throws -> FilePlan {
+        let table: (headers: [String], rows: [[String: String]])
+        if url.pathExtension.lowercased() == "xlsx" {
+            table = try XLSXReader.readTable(at: url, headerRowIndex: 0)
+        } else {
+            table = try CSVParser.readTable(at: url)
+        }
+        var sources: [UnifiedColumn: [String]] = [:]
+        for h in table.headers {
+            guard let col = UnifiedColumn(rawValue: h), sources[col] == nil else { continue }
+            sources[col] = [h]
+        }
+        return FilePlan(url: url, channel: .simple, headers: table.headers, rows: table.rows,
+                        sources: sources, separators: [:], passthrough: true)
     }
 
     private static func readTable(url: URL, channel: Channel) throws -> (headers: [String], rows: [[String: String]]) {

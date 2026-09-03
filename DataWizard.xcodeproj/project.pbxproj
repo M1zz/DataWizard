@@ -21,6 +21,10 @@
 		BB01CC02DD03EE04FF050601 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = BB11CC22DD33EE44FF556601 /* Assets.xcassets */; };
 		CC01DD02EE03FF0405060701 /* ValueUnify.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC11DD22EE33FF4455660701 /* ValueUnify.swift */; };
 		CC01DD09EE03FF0405060709 /* SessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC11DD29EE33FF4455660709 /* SessionStore.swift */; };
+		CC01DD0AEE03FF0405060710 /* BaseSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC11DD2AEE33FF4455660710 /* BaseSheet.swift */; };
+		CC02DD1BEE13FF0405060711 /* ColumnMatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC12DD3BEE43FF4455660711 /* ColumnMatcher.swift */; };
+		CC01DD0CEE03FF0405060712 /* ExampleRuleSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC11DD2CEE33FF4455660712 /* ExampleRuleSheet.swift */; };
+		CC01DD0BEE03FF0405060711 /* RuleInference.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC11DD2BEE33FF4455660711 /* RuleInference.swift */; };
 		FA01FA02FA03FA04FA05FA06 /* MappingPresets.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA11FA22FA33FA44FA55FA66 /* MappingPresets.swift */; };
 		CC01DD03EE03FF0405060702 /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC11DD23EE33FF4455660702 /* AppSettings.swift */; };
 /* End PBXBuildFile section */
@@ -40,6 +44,10 @@
 		BB11CC22DD33EE44FF556601 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Assets.xcassets"; sourceTree = "<group>"; };
 		CC11DD22EE33FF4455660701 /* ValueUnify.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ValueUnify.swift"; sourceTree = "<group>"; };
 		CC11DD29EE33FF4455660709 /* SessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SessionStore.swift"; sourceTree = "<group>"; };
+		CC11DD2AEE33FF4455660710 /* BaseSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BaseSheet.swift"; sourceTree = "<group>"; };
+		CC12DD3BEE43FF4455660711 /* ColumnMatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ColumnMatcher.swift"; sourceTree = "<group>"; };
+		CC11DD2CEE33FF4455660712 /* ExampleRuleSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ExampleRuleSheet.swift"; sourceTree = "<group>"; };
+		CC11DD2BEE33FF4455660711 /* RuleInference.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "RuleInference.swift"; sourceTree = "<group>"; };
 		FA11FA22FA33FA44FA55FA66 /* MappingPresets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MappingPresets.swift"; sourceTree = "<group>"; };
 		CC11DD23EE33FF4455660702 /* AppSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppSettings.swift"; sourceTree = "<group>"; };
 		3495D0341DEC44498FDFCD7B /* DataWizard.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = DataWizard.entitlements; sourceTree = "<group>"; };
@@ -73,6 +81,10 @@
 			BB11CC22DD33EE44FF556601 /* Assets.xcassets */,
 			CC11DD22EE33FF4455660701 /* ValueUnify.swift */,
 			CC11DD29EE33FF4455660709 /* SessionStore.swift */,
+			CC11DD2AEE33FF4455660710 /* BaseSheet.swift */,
+			CC12DD3BEE43FF4455660711 /* ColumnMatcher.swift */,
+			CC11DD2CEE33FF4455660712 /* ExampleRuleSheet.swift */,
+			CC11DD2BEE33FF4455660711 /* RuleInference.swift */,
 			FA11FA22FA33FA44FA55FA66 /* MappingPresets.swift */,
 			CC11DD23EE33FF4455660702 /* AppSettings.swift */,
 			3495D0341DEC44498FDFCD7B /* DataWizard.entitlements */,
@@ -114,6 +126,10 @@
 				AA01BB02CC03DD04EE05FF06 /* MappingPlan.swift in Sources */,
 				CC01DD02EE03FF0405060701 /* ValueUnify.swift in Sources */,
 				CC01DD09EE03FF0405060709 /* SessionStore.swift in Sources */,
+				CC01DD0AEE03FF0405060710 /* BaseSheet.swift in Sources */,
+				CC02DD1BEE13FF0405060711 /* ColumnMatcher.swift in Sources */,
+				CC01DD0CEE03FF0405060712 /* ExampleRuleSheet.swift in Sources */,
+				CC01DD0BEE03FF0405060711 /* RuleInference.swift in Sources */,
 				FA01FA02FA03FA04FA05FA06 /* MappingPresets.swift in Sources */,
 				CC01DD03EE03FF0405060702 /* AppSettings.swift in Sources */,
 			); runOnlyForDeploymentPostprocessing = 0; };

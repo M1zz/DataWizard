@@ -13,6 +13,13 @@ enum CSVParser {
         var s = text
         if s.hasPrefix("\u{FEFF}") { s.removeFirst() }
 
+        // 줄바꿈을 LF로 통일한다. Swift에서 "\r\n"은 두 글자가 아니라 하나의
+        // Character(grapheme cluster)라, 아래 상태 기계가 '\r'나 '\n' 어느 쪽과도
+        // 같지 않다고 판단해 CRLF 파일 전체가 한 줄로 읽히던 문제를 막는다.
+        // (이 도구가 내보내는 CSV도 CRLF다 — 내보낸 파일을 다시 읽어야 한다.)
+        s = s.replacingOccurrences(of: "\r\n", with: "\n")
+             .replacingOccurrences(of: "\r", with: "\n")
+
         var rows: [[String]] = []
         var field = ""
         var row: [String] = []
@@ -48,10 +55,6 @@ enum CSVParser {
                 } else if c == "," {
                     row.append(field)
                     field = ""
-                    i += 1
-                    continue
-                } else if c == "\r" {
-                    // Swallow CR; the following LF (if any) closes the row
                     i += 1
                     continue
                 } else if c == "\n" {
