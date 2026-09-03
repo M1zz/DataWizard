@@ -4069,6 +4069,11 @@ struct ContentView: View {
         }
         focusColumns = Set((s.focusColumns ?? []).compactMap(col))
         baseIsUserFile = (s.baseIsUserFile ?? false) && base != nil
+        // 사용자가 고른 틀이 아니면 기준선은 올린 파일들로 다시 만든다.
+        // (이전 버전 세션에는 행 출처가 없어서 미리보기 파일 색이 안 나왔다.)
+        if !baseIsUserFile, !plans.isEmpty {
+            base = BaseSheet.stacked(plans, name: stackedName(plans))
+        }
         matchColumn = s.matchColumn.flatMap(col)
         indexBase()
         refreshMatches()
@@ -6199,7 +6204,7 @@ final class PreviewModel: ObservableObject {
         case .resolved, .nothingToDo:
             if improved { return .accentColor.opacity(0.10) }
             // 한 파일에서만 온 컬럼은 그 파일 색으로 — 어디서 온 열인지 배경으로 보이게.
-            if let t = ownerTint(c) { return t.opacity(0.07) }
+            if let t = ownerTint(c) { return t.opacity(0.10) }
             return splitColumns.contains(c) ? .orange.opacity(0.05) : .clear
         }
     }
@@ -6223,7 +6228,7 @@ struct PreviewWindowView: View {
     @State private var query = ""
     @State private var improvedOnly = false
     /// 파일 색·컬럼 상태 색을 켤지 (기본 켬, 설정에 기억).
-    @AppStorage("previewShowColors") private var showColors = true
+    @AppStorage("previewShowColors.v2") private var showColors = true
     @Environment(\.dismiss) private var dismiss
 
     /// (원본 행 번호, 행) — 검색·필터를 거쳐도 diff/이전값 조회용 인덱스 유지.
@@ -6284,6 +6289,11 @@ struct PreviewWindowView: View {
                 .foregroundStyle(Color.accentColor)
                 .help("정리 전과 비교해 값이 좋아진 셀 수입니다.")
         }
+        if showColors, model.rowFiles.isEmpty {
+            Label("행 출처 없음 — 파일 색을 못 그려요", systemImage: "questionmark.circle")
+                .font(.caption).foregroundStyle(.secondary)
+                .help("합쳐진 행이 어느 파일에서 왔는지 정보가 없습니다. 파일을 다시 올리면 표시됩니다.")
+        }
         if let f = model.focused {
             Label("보는 중: \(f.rawValue)", systemImage: "eye.fill")
                 .font(.subheadline.weight(.medium))
@@ -6334,7 +6344,7 @@ struct PreviewWindowView: View {
                                         bodyCell(c, row: row, at: i)
                                     }
                                 }
-                                .background(showColors ? (model.fileTint(row: i)?.opacity(0.08) ?? .clear) : .clear)
+                                .background(showColors ? (model.fileTint(row: i)?.opacity(0.14) ?? .clear) : .clear)
                                 Divider()
                             }
                         } header: {
@@ -6542,7 +6552,7 @@ struct PreviewWindowView: View {
     private func headerTint(_ c: UnifiedColumn, _ st: ColumnWorkStatus) -> Color {
         if st.needsWork { return .orange.opacity(0.14) }
         if model.checked.contains(c) { return .green.opacity(0.14) }
-        if let t = model.ownerTint(c) { return t.opacity(0.16) }
+        if let t = model.ownerTint(c) { return t.opacity(0.22) }
         return model.splitColumns.contains(c) ? .orange.opacity(0.08) : .clear
     }
 

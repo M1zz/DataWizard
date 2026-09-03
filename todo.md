@@ -535,3 +535,15 @@
 - [x] 창 툴바·셀을 `windowToolbar`/`summaryChips`/`viewOptions`/`bodyCell`로 분리
       (타입 체크 시간 초과 해소)
 - 확인: `xcodebuild ... build` → BUILD SUCCEEDED
+
+### 미리보기 색이 계속 안 나오던 원인 추적
+- 데이터 경로는 이상 없음을 헤드리스로 확인 (3파일 → stacked → `rowOrigins [0,0,1,1,2]`,
+  컬럼별 owners 정확, PatchEngine이 행 수를 유지 → 출처 인덱스 유효)
+- [x] **이어서 하기(세션 복원) 때 색이 없던 진짜 이유** — 저장된 기준선에는 행 출처가
+      없었다(이전 버전 스냅샷). 복원 시 사용자가 고른 틀이 아니면 `BaseSheet.stacked`로
+      기준선을 다시 만들어 출처를 되살린다
+- [x] `색 표시` 저장 키를 새로 (`previewShowColors.v2`) — 예전에 꺼 둔 값이 남아 흑백으로
+      보이던 경우 방지, 기본 켬
+- [x] 색을 진하게: 행 배경 0.08 → 0.14, 열 머리글 출처색 0.16 → 0.22, 셀 0.07 → 0.10
+- [x] 그래도 못 그리면 이유를 표시: 툴바에 `행 출처 없음 — 파일 색을 못 그려요`
+- 확인: `xcodebuild ... build` → BUILD SUCCEEDED
