@@ -258,7 +258,7 @@ struct ColumnMatchSheet: View {
             Text(baseName.isEmpty
                  ? "올린 파일들끼리 값을 견줘 봤어요. 같은 컬럼이면 한 칸으로 합칩니다 — 아니면 ‘합치지 않음’으로 두세요."
                  : "틀 ‘\(baseName)’에 있는 값과 이번 파일의 값을 견줘 봤어요. 같은 컬럼이면 합쳐서 틀의 자리에 채웁니다 — 아니면 ‘합치지 않음’으로 두세요.")
-                .font(.callout).foregroundStyle(.secondary)
+                .font(.body).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -279,7 +279,7 @@ struct ColumnMatchSheet: View {
                     Text(s.source.rawValue)
                         .font(.body.weight(.semibold))
                     Text(baseName.isEmpty ? "이 컬럼을" : "이번 파일")
-                        .font(.caption2).foregroundStyle(.secondary)
+                        .font(.body).foregroundStyle(.secondary)
                 }
                 Image(systemName: "arrow.right")
                     .foregroundStyle(target == nil ? Color.secondary : Color.accentColor)
@@ -301,7 +301,7 @@ struct ColumnMatchSheet: View {
             }
             if isAmbiguous(s) {
                 Label("비슷한 후보가 여럿이에요 — 값을 보고 골라 주세요", systemImage: "questionmark.circle")
-                    .font(.caption).foregroundStyle(.orange)
+                    .font(.body).foregroundStyle(.orange)
             }
             HStack(alignment: .top, spacing: 12) {
                 valueColumn("이번 값", sourceSamples[s.source] ?? [])
@@ -322,9 +322,9 @@ struct ColumnMatchSheet: View {
 
     private func valueColumn(_ title: String, _ values: [String]) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(title).font(.caption2).foregroundStyle(.secondary)
+            Text(title).font(.body).foregroundStyle(.secondary)
             ForEach(values.prefix(4), id: \.self) { v in
-                Text(v).font(.caption).lineLimit(1).truncationMode(.middle)
+                Text(v).font(.body).lineLimit(1).truncationMode(.middle)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -333,7 +333,7 @@ struct ColumnMatchSheet: View {
     private var footer: some View {
         HStack {
             Text(picked.isEmpty ? "고른 짝이 없습니다" : "\(picked.count)개를 합칩니다")
-                .font(.callout).foregroundStyle(.secondary)
+                .font(.body).foregroundStyle(.secondary)
             Spacer()
             Button("닫기") { onClose() }
             Button {

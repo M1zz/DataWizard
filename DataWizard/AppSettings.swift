@@ -72,8 +72,8 @@ struct SettingsView: View {
             Section("미리보기") {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("컬럼별 검토").font(.headline)
-                    Text("값 통일 · 12종 값 · 340행").font(.caption).foregroundStyle(.secondary)
-                    Text("010-2375-5880").font(.callout)
+                    Text("값 통일 · 12종 값 · 340행").font(.body).foregroundStyle(.secondary)
+                    Text("010-2375-5880").font(.body)
                 }
                 .dynamicTypeSize(selection.wrappedValue.dynamicTypeSize)
                 .frame(maxWidth: .infinity, alignment: .leading)

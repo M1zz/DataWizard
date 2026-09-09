@@ -86,7 +86,7 @@ struct ExampleRuleSheet: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("‘\(column.rawValue)’ — 예시로 규칙 만들기").font(.headline)
                 Text("고치고 싶은 값 두어 개만 ‘지금 값 → 바꾸고 싶은 값’으로 적어 주세요. 같은 규칙이 걸리는 나머지 값까지 찾아 드립니다.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.body).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
@@ -103,14 +103,14 @@ struct ExampleRuleSheet: View {
                 stepLabel(1, "이렇게 바꾸고 싶어요")
                 Spacer()
                 Text("예:  서울특별시 → 서울    ·    2004.05.31 → 2004-05-31")
-                    .font(.caption).foregroundStyle(.tertiary)
+                    .font(.body).foregroundStyle(.tertiary)
             }
 
             HStack(spacing: 8) {
-                Text("지금 값").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                Text("지금 값").font(.body.weight(.semibold)).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 Spacer().frame(width: 22)
-                Text("바꾸고 싶은 값").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                Text("바꾸고 싶은 값").font(.body.weight(.semibold)).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 Spacer().frame(width: 26)
             }
@@ -130,7 +130,7 @@ struct ExampleRuleSheet: View {
                      ? "한 줄만 적어도 제안이 나와요. 두 줄 이상이면 훨씬 정확해집니다."
                      : "예시 \(usableCount)개로 규칙을 찾았어요."
                         + (usableCount == 1 ? " 한 줄 더 적으면 더 정확해집니다." : ""))
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.body).foregroundStyle(.secondary)
                 Spacer()
             }
 
@@ -138,7 +138,7 @@ struct ExampleRuleSheet: View {
                 Label("이 컬럼에 없는 값이에요: " + unknownExamples.joined(separator: ", ")
                       + " — 오타가 아닌지 확인해 주세요.",
                       systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption).foregroundStyle(.orange)
+                    .font(.body).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -164,7 +164,7 @@ struct ExampleRuleSheet: View {
             .frame(maxWidth: .infinity)
 
             Image(systemName: "arrow.right")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.body).foregroundStyle(.secondary)
                 .frame(width: 22)
 
             TextField("바꾸고 싶은 값", text: ex.after)
@@ -219,19 +219,19 @@ struct ExampleRuleSheet: View {
                         .font(.body.weight(.semibold))
                         .fixedSize(horizontal: false, vertical: true)
                     Text(rule.detail)
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.body).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 8)
                 VStack(alignment: .trailing, spacing: 2) {
                     Text("\(n)종 바뀜")
-                        .font(.caption.weight(.semibold)).monospacedDigit()
+                        .font(.body.weight(.semibold)).monospacedDigit()
                         .foregroundStyle(n == 0 ? Color.secondary : Color.accentColor)
                     Text("전체 \(values.count)종 중")
-                        .font(.caption2).foregroundStyle(.tertiary)
+                        .font(.body).foregroundStyle(.tertiary)
                     if rule.isLiteralOnly {
                         Text("다른 값 영향 없음")
-                            .font(.caption2).foregroundStyle(.green)
+                            .font(.body).foregroundStyle(.green)
                     }
                 }
                 .fixedSize()
@@ -258,7 +258,7 @@ struct ExampleRuleSheet: View {
                 Spacer()
                 Text(list.isEmpty ? "바뀌는 값 없음"
                                   : "\(list.count)종 · \(list.reduce(0) { $0 + $1.count })행")
-                    .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                    .font(.body).foregroundStyle(.secondary).monospacedDigit()
             }
             if list.isEmpty {
                 emptyCard("이 규칙으로는 바뀌는 값이 없어요. 다른 규칙을 골라 보세요.",
@@ -271,22 +271,22 @@ struct ExampleRuleSheet: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .foregroundStyle(.secondary)
                             Image(systemName: "arrow.right")
-                                .font(.caption2).foregroundStyle(.secondary)
+                                .font(.body).foregroundStyle(.secondary)
                             Text(c.to)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .fontWeight(.semibold).foregroundStyle(Color.accentColor)
                             Text("\(c.count)행")
-                                .font(.caption).foregroundStyle(.tertiary).monospacedDigit()
+                                .font(.body).foregroundStyle(.tertiary).monospacedDigit()
                                 .frame(width: 52, alignment: .trailing)
                         }
-                        .font(.system(.callout, design: .monospaced))
+                        .font(.system(.body, design: .monospaced))
                         .lineLimit(1).truncationMode(.middle)
                         .padding(.horizontal, 10).padding(.vertical, 5)
                         Divider()
                     }
                     if list.count > 200 {
                         Text("… 외 \(list.count - 200)종")
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(.body).foregroundStyle(.secondary)
                             .padding(.vertical, 6)
                     }
                 }
@@ -297,7 +297,7 @@ struct ExampleRuleSheet: View {
 
                 Label("나머지 \(values.count - list.count)종은 손대지 않습니다. 어떤 규칙도 값을 빈칸으로 만들지 않아요.",
                       systemImage: "lock.shield")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.body).foregroundStyle(.secondary)
             }
         }
     }
@@ -308,7 +308,7 @@ struct ExampleRuleSheet: View {
         HStack(spacing: 6) {
             ZStack {
                 Circle().fill(Color.accentColor.opacity(0.15)).frame(width: 20, height: 20)
-                Text("\(n)").font(.caption2.weight(.bold)).foregroundStyle(Color.accentColor)
+                Text("\(n)").font(.body.weight(.bold)).foregroundStyle(Color.accentColor)
             }
             Text(title).font(.headline)
         }
@@ -316,7 +316,7 @@ struct ExampleRuleSheet: View {
 
     private func emptyCard(_ message: String, icon: String) -> some View {
         Label(message, systemImage: icon)
-            .font(.callout).foregroundStyle(.secondary)
+            .font(.body).foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -328,7 +328,7 @@ struct ExampleRuleSheet: View {
         HStack {
             if let rule = selectedRule, usableCount > 0 {
                 Text("고른 규칙: \(rule.title)")
-                    .font(.callout).foregroundStyle(.secondary)
+                    .font(.body).foregroundStyle(.secondary)
                     .lineLimit(1).truncationMode(.tail)
             }
             Spacer()

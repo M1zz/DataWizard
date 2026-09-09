@@ -278,15 +278,15 @@ struct ContentView: View {
                                       : "파일 \(plans.count)개 · 합쳐서 \(rows)행")
                     .font(.title3.weight(.bold))
                 Text("컬럼 \(finalColumns.count)개 — 같은 이름의 컬럼끼리 자동으로 맞춰집니다. 고르지 않은 컬럼은 손대지 않아요.")
-                    .font(.callout).foregroundStyle(.secondary)
+                    .font(.body).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 if let templateName {
                     Text(templateCoverageLine(templateName))
-                        .font(.caption).foregroundStyle(Color.accentColor)
+                        .font(.body).foregroundStyle(Color.accentColor)
                         .fixedSize(horizontal: false, vertical: true)
                 } else if baseIsUserFile, let sheet = base {
                     Text(baseCoverageLine(sheet))
-                        .font(.caption).foregroundStyle(Color.accentColor)
+                        .font(.body).foregroundStyle(Color.accentColor)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -332,11 +332,11 @@ struct ContentView: View {
                             .foregroundStyle(fileTint(idx))
                         VStack(alignment: .leading, spacing: 1) {
                             Text(plan.fileName)
-                                .font(.callout.weight(.medium))
+                                .font(.body.weight(.medium))
                                 .lineLimit(1).truncationMode(.middle)
                                 .help(plan.url.path)
                             Text("\(plan.rows.count)행 · \(plan.headers.count)컬럼")
-                                .font(.caption).foregroundStyle(.secondary)
+                                .font(.body).foregroundStyle(.secondary)
                         }
                         Button {
                             removeWorkFile(plan)
@@ -367,11 +367,11 @@ struct ContentView: View {
         HStack(spacing: 10) {
             Text("어떤 컬럼을 고칠까요?").font(.headline)
             Text("선택 \(focusColumns.count) / \(finalColumns.count)")
-                .font(.subheadline).monospacedDigit().foregroundStyle(.secondary)
+                .font(.body).monospacedDigit().foregroundStyle(.secondary)
             Spacer()
             if baseIsUserFile, let base {
                 Label("기준: \(base.name)", systemImage: "arrow.trianglehead.merge")
-                    .font(.caption).foregroundStyle(Color.accentColor)
+                    .font(.body).foregroundStyle(Color.accentColor)
                     .lineLimit(1).truncationMode(.middle)
                 Picker("짝짓기", selection: $matchColumn) {
                     Text("자동 (Code·전화·이메일)").tag(UnifiedColumn?.none)
@@ -495,22 +495,22 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 0) {
                     Text("파일")
-                        .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-                        .frame(width: 96, alignment: .leading)
+                        .font(.body.weight(.semibold)).foregroundStyle(.secondary)
+                        .frame(width: 120, alignment: .leading)
                         .padding(.horizontal, 8).padding(.vertical, 5)
                     ForEach(shown) { c in
                         let here = (c == col)
                         VStack(alignment: .leading, spacing: 1) {
                             Text(c.rawValue)
-                                .font(.caption2.weight(here ? .bold : .semibold))
+                                .font(.body.weight(here ? .bold : .semibold))
                                 .foregroundStyle(here ? Color.accentColor : .secondary)
                                 .lineLimit(1).truncationMode(.tail)
                             if here {
                                 Text("지금 볼 컬럼")
-                                    .font(.caption2).foregroundStyle(Color.accentColor)
+                                    .font(.body).foregroundStyle(Color.accentColor)
                             }
                         }
-                        .frame(width: here ? 170 : 110, alignment: .leading)
+                        .frame(width: here ? 190 : 130, alignment: .leading)
                         .padding(.horizontal, 8).padding(.vertical, 5)
                         .background(here ? Color.accentColor.opacity(0.16) : .clear)
                         .overlay(alignment: .leading) { proposalEdge(here) }
@@ -526,10 +526,10 @@ struct ContentView: View {
                             RoundedRectangle(cornerRadius: 2).fill(fileTint(item.file))
                                 .frame(width: 3, height: 12)
                             Text(plan.fileName)
-                                .font(.caption2).foregroundStyle(fileTint(item.file))
+                                .font(.body).foregroundStyle(fileTint(item.file))
                                 .lineLimit(1).truncationMode(.middle)
                         }
-                        .frame(width: 96, alignment: .leading)
+                        .frame(width: 120, alignment: .leading)
                         .padding(.horizontal, 8).padding(.vertical, 4)
                         ForEach(shown) { c in
                             let here = (c == col)
@@ -537,17 +537,17 @@ struct ContentView: View {
                             let bad = here && flagged.contains(value)
                             HStack(spacing: 4) {
                                 Text(value.isEmpty ? "—" : value)
-                                    .font(.caption.weight(bad ? .semibold : .regular))
+                                    .font(.body.weight(bad ? .semibold : .regular))
                                     .foregroundStyle(bad ? Color.orange
                                                      : (value.isEmpty ? Color.secondary.opacity(0.5)
                                                         : (here ? .primary : .secondary)))
                                     .lineLimit(1).truncationMode(.tail)
                                 if bad {
                                     Image(systemName: "exclamationmark.triangle.fill")
-                                        .font(.caption2).foregroundStyle(.orange)
+                                        .font(.body).foregroundStyle(.orange)
                                 }
                             }
-                            .frame(width: here ? 170 : 110, alignment: .leading)
+                            .frame(width: here ? 190 : 130, alignment: .leading)
                             .padding(.horizontal, 8).padding(.vertical, 4)
                             .background(here ? Color.accentColor.opacity(0.10) : .clear)
                             .overlay(alignment: .leading) { proposalEdge(here) }
@@ -589,7 +589,7 @@ struct ContentView: View {
                         .font(.title3.weight(.bold))
                     Spacer()
                     Text("손볼 컬럼 \(order.count)개 · 제안 \(i + 1)번째")
-                        .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                        .font(.body).monospacedDigit().foregroundStyle(.secondary)
                 }
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 8) {
@@ -598,22 +598,22 @@ struct ContentView: View {
                             .lineLimit(1).truncationMode(.tail)
                         if i == 0 {
                             Text("가장 빨리 끝나요")
-                                .font(.caption2.weight(.semibold)).foregroundStyle(.green)
+                                .font(.body.weight(.semibold)).foregroundStyle(.green)
                                 .padding(.horizontal, 8).padding(.vertical, 3)
                                 .background(Capsule().fill(Color.green.opacity(0.14)))
                         }
                         if picked {
                             Text("이미 고름")
-                                .font(.caption2.weight(.semibold)).foregroundStyle(Color.accentColor)
+                                .font(.body.weight(.semibold)).foregroundStyle(Color.accentColor)
                                 .padding(.horizontal, 8).padding(.vertical, 3)
                                 .background(Capsule().fill(Color.accentColor.opacity(0.14)))
                         }
                     }
                     Text(status.text)
-                        .font(.callout).foregroundStyle(.secondary)
+                        .font(.body).foregroundStyle(.secondary)
                     if let review {
                         Text("합쳐진 표에서는 이렇게 보여요 — " + columnPlaceNote(col))
-                            .font(.caption2).foregroundStyle(.secondary)
+                            .font(.body).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                         ScrollView(.horizontal, showsIndicators: false) {
                             proposalPreview(review)
@@ -675,7 +675,7 @@ struct ContentView: View {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Image(systemName: "checkmark.seal.fill").foregroundStyle(.green)
                     Text("손댈 것 없이 완성되는 컬럼 \(settled.count)개")
-                        .font(.callout.weight(.semibold))
+                        .font(.body.weight(.semibold))
                     Spacer()
                     Button(showSettledSummary ? "접기" : "모두 보기") {
                         withAnimation(.easeInOut(duration: 0.18)) { showSettledSummary.toggle() }
@@ -685,14 +685,14 @@ struct ContentView: View {
                 Text((showSettledSummary ? settled : Array(settled.prefix(6)))
                         .map(\.rawValue).joined(separator: " · ")
                      + (showSettledSummary || settled.count <= 6 ? "" : " … 외 \(settled.count - 6)개"))
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.body).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Text("고르지 않아도 결과 파일에 그대로 들어갑니다 — 값도 원본 그대로예요.")
-                    .font(.caption2).foregroundStyle(.secondary)
+                    .font(.body).foregroundStyle(.secondary)
                 if !auto.isEmpty {
                     Toggle(isOn: $autoFillSettled) {
                         Text("이 중 \(auto.count)개는 정해 둔 규칙대로 다듬어서 채우기 (\(auto.prefix(3).map(\.rawValue).joined(separator: " · "))\(auto.count > 3 ? " 외" : ""))")
-                            .font(.caption)
+                            .font(.body)
                     }
                     .toggleStyle(.checkbox)
                 }
@@ -711,20 +711,20 @@ struct ContentView: View {
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: showAllColumns ? "chevron.down" : "chevron.right")
-                    .font(.caption.weight(.bold))
+                    .font(.body.weight(.bold))
                 Text(showAllColumns
                      ? "목록 접기"
                      : "전체 컬럼 목록에서 직접 고르기 (\(finalColumns.count)개)")
                 if !showAllColumns, !focusColumns.isEmpty {
                     Text("\(focusColumns.count)개 고름")
-                        .font(.caption2.weight(.semibold))
+                        .font(.body.weight(.semibold))
                         .padding(.horizontal, 7).padding(.vertical, 2)
                         .background(Capsule().fill(Color.accentColor.opacity(0.14)))
                         .foregroundStyle(Color.accentColor)
                 }
                 Spacer()
             }
-            .font(.callout).foregroundStyle(.secondary)
+            .font(.body).foregroundStyle(.secondary)
             .padding(.horizontal, 6).padding(.vertical, 10)
             .contentShape(Rectangle())
         }
@@ -759,20 +759,20 @@ struct ContentView: View {
                     } label: {
                         HStack(spacing: 8) {
                             Image(systemName: showSettledColumns ? "chevron.down" : "chevron.right")
-                                .font(.caption.weight(.bold))
+                                .font(.body.weight(.bold))
                             Text(showSettledColumns
                                  ? "정리된 컬럼 접기"
                                  : "정리된 컬럼도 보기 (\(split.settled.count)개)")
                             if hiddenPicked > 0 && !showSettledColumns {
                                 Text("\(hiddenPicked)개 선택됨")
-                                    .font(.caption2.weight(.semibold))
+                                    .font(.body.weight(.semibold))
                                     .padding(.horizontal, 7).padding(.vertical, 2)
                                     .background(Capsule().fill(Color.accentColor.opacity(0.14)))
                                     .foregroundStyle(Color.accentColor)
                             }
                             Spacer()
                         }
-                        .font(.callout)
+                        .font(.body)
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 6).padding(.vertical, 10)
                         .contentShape(Rectangle())
@@ -795,7 +795,7 @@ struct ContentView: View {
             Text("손볼 거리가 있는 컬럼이 없어요")
                 .font(.title3.weight(.semibold))
             Text("오타 의심값이나 형식이 어긋난 값을 찾지 못했습니다.\n그냥 가져가도 되고, 아래에서 컬럼을 펼쳐 직접 다듬어도 됩니다.")
-                .font(.callout).foregroundStyle(.secondary)
+                .font(.body).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -885,7 +885,7 @@ struct ContentView: View {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text("완성본 미리보기").font(.headline)
                     Text("지금 상태로 만들어진 결과입니다 — 전체 \(preview.rows.count)행 중 \(sample.count)줄")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.body).foregroundStyle(.secondary)
                     Spacer()
                 }
                 ScrollView([.horizontal, .vertical]) {
@@ -914,7 +914,7 @@ struct ContentView: View {
     private func previewHeaderRow(_ cols: [UnifiedColumn]) -> some View {
         HStack(spacing: 0) {
             Text("행 · 출처")
-                .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                .font(.body.weight(.semibold)).foregroundStyle(.secondary)
                 .frame(width: 150, alignment: .leading)
                 .padding(.horizontal, 8).padding(.vertical, 6)
             ForEach(cols) { col in previewHeaderCell(col) }
@@ -936,19 +936,19 @@ struct ContentView: View {
             : (owner?.opacity(0.16) ?? (split ? Color.orange.opacity(0.10) : Color.clear))
         return VStack(alignment: .leading, spacing: 1) {
             Text(col.rawValue)
-                .font(.caption.weight(here ? .bold : .semibold))
+                .font(.body.weight(here ? .bold : .semibold))
                 .foregroundStyle(here ? Color.accentColor : (split ? Color.orange : .primary))
                 .lineLimit(1).truncationMode(.tail)
             if let caption {
                 HStack(spacing: 4) {
                     if !here && plans.count > 1 { ownerDots(col) }
                     Text(caption)
-                        .font(.caption2).foregroundStyle(captionTint)
+                        .font(.body).foregroundStyle(captionTint)
                         .lineLimit(1).truncationMode(.tail)
                 }
             }
         }
-        .frame(width: 132, alignment: .leading)
+        .frame(width: 152, alignment: .leading)
         .padding(.horizontal, 8).padding(.vertical, 6)
         .background(background)
         .overlay(alignment: .leading) { proposalEdge(here) }
@@ -971,12 +971,12 @@ struct ContentView: View {
                     .frame(width: 3, height: 14)
                 if let badge = preview.rowBadge(row: i) {
                     Text(badge)
-                        .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                        .font(.body.weight(.semibold)).foregroundStyle(.secondary)
                         .padding(.horizontal, 4).padding(.vertical, 1)
                         .background(Capsule().fill(Color.secondary.opacity(0.14)))
                 }
                 Text(preview.fileLabel(row: i))
-                    .font(.caption2).foregroundStyle(tint ?? .secondary)
+                    .font(.body).foregroundStyle(tint ?? .secondary)
                     .lineLimit(1).truncationMode(.middle)
             }
             .frame(width: 150, alignment: .leading)
@@ -1012,12 +1012,12 @@ struct ContentView: View {
             : (columnOwnerTint(col)?.opacity(0.07)
                ?? (isSplitColumn(col) ? Color.orange.opacity(0.05) : Color.clear))
         return Text(value.isEmpty ? "—" : value)
-            .font(.caption)
+            .font(.body)
             .fontWeight(improved ? .medium : .regular)
             .foregroundStyle(improved ? Color.accentColor
                              : (value.isEmpty ? Color.secondary.opacity(0.5) : .primary))
             .lineLimit(1).truncationMode(.tail)
-            .frame(width: 132, alignment: .leading)
+            .frame(width: 152, alignment: .leading)
             .padding(.horizontal, 8).padding(.vertical, 5)
             .background(background)
             .overlay(alignment: .leading) { proposalEdge(here) }
@@ -1031,7 +1031,7 @@ struct ContentView: View {
                 HStack(spacing: 4) {
                     RoundedRectangle(cornerRadius: 2).fill(fileTint(idx)).frame(width: 10, height: 10)
                     Text(plan.fileName)
-                        .font(.caption2).foregroundStyle(.secondary)
+                        .font(.body).foregroundStyle(.secondary)
                         .lineLimit(1).truncationMode(.middle)
                 }
             }
@@ -1040,7 +1040,7 @@ struct ContentView: View {
                     RoundedRectangle(cornerRadius: 2).fill(Color.secondary.opacity(0.35))
                         .frame(width: 10, height: 10)
                     Text("틀: \(preview.baseName)")
-                        .font(.caption2).foregroundStyle(.secondary)
+                        .font(.body).foregroundStyle(.secondary)
                         .lineLimit(1).truncationMode(.middle)
                 }
             }
@@ -1048,16 +1048,16 @@ struct ContentView: View {
             HStack(spacing: 4) {
                 RoundedRectangle(cornerRadius: 2).fill(Color.orange.opacity(0.3)).frame(width: 10, height: 10)
                 Text("아직 안 합쳐진 컬럼")
-                    .font(.caption2).foregroundStyle(.secondary)
+                    .font(.body).foregroundStyle(.secondary)
             }
             HStack(spacing: 4) {
                 Circle().fill(Color.secondary.opacity(0.35)).frame(width: 8, height: 8)
                 Text("열 배경·점 = 그 컬럼이 들어 있는 파일")
-                    .font(.caption2).foregroundStyle(.secondary)
+                    .font(.body).foregroundStyle(.secondary)
             }
             HStack(spacing: 4) {
-                Text("—").font(.caption2).foregroundStyle(.secondary.opacity(0.6))
-                Text("그 파일엔 없는 값 (빈칸)").font(.caption2).foregroundStyle(.secondary)
+                Text("—").font(.body).foregroundStyle(.secondary.opacity(0.6))
+                Text("그 파일엔 없는 값 (빈칸)").font(.body).foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
         }
@@ -1084,16 +1084,16 @@ struct ContentView: View {
                     Text("1. 합치기")
                         .font(.headline)
                     Text("파일 \(plans.count)개를 세로로 쌓아 \(rows)행 · 컬럼 \(finalColumns.count)개")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.body).foregroundStyle(.secondary)
                     Spacer()
                     if clean {
                         Label("충돌 없음", systemImage: "checkmark.seal.fill")
-                            .font(.caption.weight(.semibold)).foregroundStyle(.green)
+                            .font(.body.weight(.semibold)).foregroundStyle(.green)
                     }
                 }
                 if clean {
                     Text("같은 이름의 컬럼은 한 칸으로 겹치고, 없는 컬럼은 빈칸으로 둡니다. 합치기는 끝났고 남은 일은 값 정리뿐이에요.")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.body).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 } else {
                     if !common.isEmpty {
@@ -1141,10 +1141,10 @@ struct ContentView: View {
     private func mergeLine(_ symbol: String, _ tint: Color, _ text: String,
                            _ actionTitle: String?, _ action: (() -> Void)?) -> some View {
         HStack(alignment: .top, spacing: 8) {
-            Image(systemName: symbol).foregroundStyle(tint).font(.caption)
+            Image(systemName: symbol).foregroundStyle(tint).font(.body)
                 .frame(width: 14)
             Text(text)
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.body).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 8)
             if let actionTitle, let action {
@@ -1419,13 +1419,13 @@ struct ContentView: View {
                         .foregroundStyle(on ? .primary : .secondary)
                         .lineLimit(1).truncationMode(.tail).help(col.rawValue)
                     Text(status.text)
-                        .font(.caption)
+                        .font(.body)
                         .foregroundStyle(status.warn ? Color.orange : Color.secondary)
                 }
                 Spacer(minLength: 8)
                 if partial {
                     Text("\(owners)/\(plans.count) 파일")
-                        .font(.caption2.weight(.semibold))
+                        .font(.body.weight(.semibold))
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 8).padding(.vertical, 3)
                         .background(Capsule().fill(Color.primary.opacity(0.06)))
@@ -1433,7 +1433,7 @@ struct ContentView: View {
                 }
                 if status.warn {
                     Text(status.badge)
-                        .font(.caption2.weight(.semibold))
+                        .font(.body.weight(.semibold))
                         .foregroundStyle(.orange)
                         .padding(.horizontal, 8).padding(.vertical, 3)
                         .background(Capsule().fill(Color.orange.opacity(0.12)))
@@ -1468,7 +1468,7 @@ struct ContentView: View {
                     .font(.system(.largeTitle, design: .rounded).weight(.bold))
                     .multilineTextAlignment(.center)
                 Text("CSV·XLSX 여러 개를 한꺼번에 끌어다 놓으면 같은 이름의 컬럼끼리 맞춰 이어 붙입니다.\n그다음 지금 고칠 컬럼만 고르면 돼요 — 나머지는 올린 그대로 나갑니다.")
-                    .font(.callout).foregroundStyle(.secondary)
+                    .font(.body).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
                 Button(action: pickWorkFiles) {
@@ -1477,7 +1477,7 @@ struct ContentView: View {
                 .controlSize(.large)
                 .buttonStyle(.borderedProminent)
                 Text("전에 만들어 둔 통합본은 여기 말고 위 1번 칸에 넣어 주세요.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.body).foregroundStyle(.secondary)
             }
             .frame(maxWidth: 520)
             .padding(40)
@@ -1520,10 +1520,10 @@ struct ContentView: View {
                         .font(.title3).foregroundStyle(.green)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("1. 틀: \(templateName) — 컬럼 \(templateColumns.count)개")
-                            .font(.callout.weight(.semibold))
+                            .font(.body.weight(.semibold))
                             .lineLimit(1).truncationMode(.middle)
                         Text("이 파일에서는 **컬럼 이름만** 가져옵니다 — 값은 올린 파일 것만 들어가요. 이제 아래 2번 칸에 합칠 파일을 올려 주세요.")
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(.body).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer(minLength: 8)
@@ -1545,9 +1545,9 @@ struct ContentView: View {
                         .foregroundStyle(isBaseDropTargeted ? Color.accentColor : .secondary)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("1. 맞출 틀이 있나요?  —  없으면 건너뛰세요")
-                            .font(.callout.weight(.semibold))
+                            .font(.body.weight(.semibold))
                         Text("전에 만들어 둔 통합본이나 채워 넣을 양식이 있으면 여기에 먼저 끌어다 놓으세요.\n그 파일에서는 **컬럼 이름만** 가져옵니다 — 값은 올린 파일 것만 들어가고, 결과는 그 컬럼 구성으로 나옵니다.")
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(.body).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer(minLength: 8)
@@ -1585,7 +1585,7 @@ struct ContentView: View {
                     Text("여러 파일 하나로 합치기")
                         .font(.system(.largeTitle, design: .rounded).weight(.bold))
                     Text("흩어진 지원 파일들을 추가하면, 완성될 컬럼과 그 안의 값을 하나씩 확인한 뒤 하나의 명단으로 만듭니다. 파일 하나만 고칠 거라면 뒤로 가세요.")
-                        .font(.callout)
+                        .font(.body)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1602,7 +1602,7 @@ struct ContentView: View {
 
                 if inputs.isEmpty {
                     Text("CSV·XLSX 파일을 여러 개 추가할 수 있어요.")
-                        .font(.caption)
+                        .font(.body)
                         .foregroundStyle(.secondary)
                 } else {
                     VStack(spacing: 8) {
@@ -1645,7 +1645,7 @@ struct ContentView: View {
                     Text("이전 작업 이어서 하기")
                         .font(.headline)
                     Text("\(s.summary) · 저장 \(Self.savedAtText(s.savedAt))")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.body).foregroundStyle(.secondary)
                 }
                 Spacer()
             }
@@ -1758,7 +1758,7 @@ struct ContentView: View {
                         .font(.system(.largeTitle, design: .rounded).weight(.bold))
                         .multilineTextAlignment(.center)
                     Text("방금 넣은 파일 \(plans.count)개를 어디에 담을지만 정하면 됩니다. 한 번에 모든 컬럼을 끝낼 필요는 없어요.")
-                        .font(.callout).foregroundStyle(.secondary)
+                        .font(.body).foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -1839,9 +1839,9 @@ struct ContentView: View {
     private var forkHelp: some View {
         VStack(alignment: .leading, spacing: 10) {
             Label("어떤 걸 골라야 할지 모르겠다면", systemImage: "questionmark.circle.fill")
-                .font(.callout.weight(.semibold))
+                .font(.body.weight(.semibold))
             Text("전에 이 도구로 만들어 저장해 둔 결과 파일이 있나요?")
-                .font(.callout)
+                .font(.body)
             VStack(alignment: .leading, spacing: 6) {
                 forkHelpRow("있고, 그 파일을 계속 고쳐 나가고 싶다", 1, "만들던 파일 이어서 고치기")
                 forkHelpRow("있지만, 값은 오늘 넣은 데이터로 전부 다시 만들 거다", 2, "컬럼 구성만 따라 하기")
@@ -1859,13 +1859,13 @@ struct ContentView: View {
             Text("•").foregroundStyle(.secondary)
             Text(situation)
                 .fixedSize(horizontal: false, vertical: true)
-            Image(systemName: "arrow.right").font(.caption2).foregroundStyle(.secondary)
+            Image(systemName: "arrow.right").font(.body).foregroundStyle(.secondary)
             Text("\(number)번 · \(title)")
                 .fontWeight(.semibold).foregroundStyle(Color.accentColor)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
-        .font(.callout)
+        .font(.body)
     }
 
     /// 예시 박스 안의 한 줄: `도시   서울 → Seoul`.
@@ -1900,7 +1900,7 @@ struct ContentView: View {
                     Circle()
                         .fill(prominent ? Color.accentColor : Color.secondary.opacity(0.25))
                         .frame(width: 26, height: 26)
-                    Text("\(number)").font(.subheadline.weight(.bold))
+                    Text("\(number)").font(.body.weight(.bold))
                         .foregroundStyle(prominent ? .white : .secondary)
                 }
                 Image(systemName: icon)
@@ -1914,10 +1914,10 @@ struct ContentView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 // 사용자가 스스로에게 할 법한 말 그대로 — 자기 상황을 알아보게.
                 Text("“\(when)”")
-                    .font(.callout).foregroundStyle(.secondary)
+                    .font(.body).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Label(outcome, systemImage: "arrow.right.circle.fill")
-                    .font(.caption.weight(.medium))
+                    .font(.body.weight(.medium))
                     .foregroundStyle(prominent ? Color.accentColor : Color.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 4)
@@ -1937,7 +1937,7 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 4) {
                 example()
             }
-            .font(.system(.caption, design: .monospaced))
+            .font(.system(.body, design: .monospaced))
             .frame(width: 290, alignment: .leading)
             .padding(12)
             .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -2018,19 +2018,19 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 2) {
                 if let referenceName {
                     Text("참조: \(referenceName)")
-                        .font(.callout.weight(.medium))
+                        .font(.body.weight(.medium))
                         .lineLimit(1).truncationMode(.middle)
                     Text("컬럼 \(referenceColumns.count)개를 이 구성으로 맞췄어요"
                          + (referenceUnmatched.isEmpty ? ""
                             : " · 못 알아본 헤더 \(referenceUnmatched.count)개"))
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.body).foregroundStyle(.secondary)
                         .help(referenceUnmatched.isEmpty ? ""
                               : "스키마에 없는 헤더:\n" + referenceUnmatched.joined(separator: "\n"))
                 } else {
                     Text("이전 완성본으로 컬럼 맞추기")
-                        .font(.callout.weight(.medium))
+                        .font(.body.weight(.medium))
                     Text("예: 2분기 보고서를 넣으면 7·8·9월 데이터도 같은 컬럼 구성으로 남깁니다.")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.body).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -2063,20 +2063,20 @@ struct ContentView: View {
                         .foregroundStyle(on ? .primary : .secondary)
                         .lineLimit(1).truncationMode(.tail).help(col.rawValue)
                     Text(status.text)
-                        .font(.caption)
+                        .font(.body)
                         .foregroundStyle(status.hasData ? Color.secondary : Color.orange)
                 }
                 Spacer(minLength: 8)
                 if referenceColumns.contains(col) {
                     Text("참조")
-                        .font(.caption2.weight(.semibold))
+                        .font(.body.weight(.semibold))
                         .foregroundStyle(Color.accentColor)
                         .padding(.horizontal, 8).padding(.vertical, 3)
                         .background(Capsule().fill(Color.accentColor.opacity(0.12)))
                 }
                 if !status.hasData {
                     Text("빈 컬럼")
-                        .font(.caption2.weight(.semibold))
+                        .font(.body.weight(.semibold))
                         .foregroundStyle(.orange)
                         .padding(.horizontal, 8).padding(.vertical, 3)
                         .background(Capsule().fill(Color.orange.opacity(0.12)))
@@ -2280,10 +2280,10 @@ struct ContentView: View {
                 .foregroundStyle(Color.accentColor)
             VStack(alignment: .leading, spacing: 2) {
                 Text("이어붙일 파일: \(base.name)")
-                    .font(.callout.weight(.medium))
+                    .font(.body.weight(.medium))
                     .lineLimit(1).truncationMode(.middle)
                 Text("\(base.rows.count)행 · 컬럼 \(base.headers.count)개 — 고르지 않은 컬럼은 그대로 보존")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.body).foregroundStyle(.secondary)
             }
             Spacer()
             Button("다른 파일로 바꾸기…") { chooseBase() }
@@ -2309,19 +2309,19 @@ struct ContentView: View {
                         .foregroundStyle(on ? .primary : .secondary)
                         .lineLimit(1).truncationMode(.tail).help(col.rawValue)
                     Text(status.text)
-                        .font(.caption)
+                        .font(.body)
                         .foregroundStyle(status.warn ? Color.orange : Color.secondary)
                 }
                 Spacer(minLength: 8)
                 if status.warn {
                     Text(status.badge)
-                        .font(.caption2.weight(.semibold))
+                        .font(.body.weight(.semibold))
                         .foregroundStyle(.orange)
                         .padding(.horizontal, 8).padding(.vertical, 3)
                         .background(Capsule().fill(Color.orange.opacity(0.12)))
                 }
                 Text(inBase ? "기존본에 있음" : "새 컬럼으로 추가")
-                    .font(.caption2.weight(.semibold))
+                    .font(.body.weight(.semibold))
                     .foregroundStyle(inBase ? Color.secondary : Color.accentColor)
                     .padding(.horizontal, 8).padding(.vertical, 3)
                     .background(Capsule().fill(inBase ? Color.primary.opacity(0.06)
@@ -2697,7 +2697,7 @@ struct ContentView: View {
                             .foregroundStyle(.primary)
                             .lineLimit(1).truncationMode(.tail)
                         Text(subtitle(for: review))
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(.body).foregroundStyle(.secondary)
                             .lineLimit(2)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -2717,12 +2717,12 @@ struct ContentView: View {
             }
             if !badge.isEmpty {
                 Text(badge)
-                    .font(.caption2.weight(.semibold)).foregroundStyle(.orange)
+                    .font(.body.weight(.semibold)).foregroundStyle(.orange)
                     .padding(.horizontal, 8).padding(.vertical, 3)
                     .background(Capsule().fill(Color.orange.opacity(0.12)))
             }
             Image(systemName: "chevron.right")
-                .font(.caption.weight(.bold)).foregroundStyle(.secondary)
+                .font(.body.weight(.bold)).foregroundStyle(.secondary)
         }
         .padding(.horizontal, 14).padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -2765,7 +2765,7 @@ struct ContentView: View {
                 .help(review.column.rawValue)
             if let i {
                 Text("\(i + 1) / \(stepOrder.count)")
-                    .font(.subheadline).monospacedDigit().foregroundStyle(.secondary)
+                    .font(.body).monospacedDigit().foregroundStyle(.secondary)
             }
             Spacer()
             Button("← 이전 컬럼") { openStep(-1) }
@@ -2782,7 +2782,7 @@ struct ContentView: View {
         let samples = sampleValues(review)
         return VStack(alignment: .leading, spacing: 8) {
             Text("이 컬럼은 이런 값이에요")
-                .font(.callout.weight(.semibold))
+                .font(.body.weight(.semibold))
                 .foregroundStyle(Color.accentColor)
             Text(explain(review))
                 .font(.body).foregroundStyle(.secondary)
@@ -2799,19 +2799,19 @@ struct ContentView: View {
             }
             if !samples.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("지금 들어 있는 값").font(.caption).foregroundStyle(.secondary)
+                    Text("지금 들어 있는 값").font(.body).foregroundStyle(.secondary)
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 6) {
                             ForEach(samples, id: \.self) { v in
                                 Text(v)
-                                    .font(.callout)
+                                    .font(.body)
                                     .lineLimit(1)
                                     .padding(.horizontal, 8).padding(.vertical, 4)
                                     .background(Capsule().fill(Color.primary.opacity(0.06)))
                             }
                             if review.distinctCount > samples.count {
                                 Text("… 외 \(review.distinctCount - samples.count)종")
-                                    .font(.caption).foregroundStyle(.secondary)
+                                    .font(.body).foregroundStyle(.secondary)
                             }
                         }
                     }
@@ -2834,7 +2834,7 @@ struct ContentView: View {
                     .foregroundStyle(gap.warn ? Color.orange : Color.green)
                 VStack(alignment: .leading, spacing: 6) {
                     Text(templateSentence(gap, sheet.name))
-                        .font(.callout)
+                        .font(.body)
                         .fixedSize(horizontal: false, vertical: true)
                     if gap.outside > 0 {
                         Button("틀의 값 목록으로 맞추기") { lockToBase(review.column) }
@@ -2867,7 +2867,7 @@ struct ContentView: View {
 
     private func statChip(_ text: String, _ symbol: String, tint: Color = .secondary) -> some View {
         Label(text, systemImage: symbol)
-            .font(.caption.weight(.medium))
+            .font(.body.weight(.medium))
             .foregroundStyle(tint)
             .padding(.horizontal, 8).padding(.vertical, 4)
             .background(Capsule().fill(tint.opacity(0.12)))
@@ -2905,7 +2905,7 @@ struct ContentView: View {
             Spacer()
             if open > 0 {
                 Text("아직 \(open)종이 남았어요 — 그대로 둬도 됩니다")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.body).foregroundStyle(.secondary)
             }
             Button("목록으로") {
                 withAnimation(.easeInOut(duration: 0.15)) { openColumn = nil }
@@ -2989,13 +2989,13 @@ struct ContentView: View {
                          ? "포맷 · \(effectiveFormat(review).rawValue) \(effectiveFormat(review).hint)"
                          : type.rawValue)
                     if isAuto {
-                        Text("자동").font(.caption2)
+                        Text("자동").font(.body)
                             .foregroundStyle(tint.opacity(0.9))
                             .padding(.horizontal, 5).padding(.vertical, 1)
                             .background(Capsule().fill(tint.opacity(0.16)))
                     }
                 }
-                .font(.caption.weight(.medium))
+                .font(.body.weight(.medium))
                 .foregroundStyle(tint)
                 .padding(.horizontal, 8).padding(.vertical, 4)
                 .background(Capsule().fill(tint.opacity(0.12)))
@@ -3202,7 +3202,7 @@ struct ContentView: View {
                         }
                         Toggle("중복 삭제 행 제외하고 내보내기", isOn: $excludeRemoved)
                             .toggleStyle(.checkbox)
-                            .font(.callout)
+                            .font(.body)
                         if let errorMessage { errorLabel(errorMessage).frame(maxWidth: 280) }
                     }
                 }
@@ -3240,9 +3240,9 @@ struct ContentView: View {
                     // 유틸 모드는 같은 파일을 제자리에서 고치므로 새 행이 생길 일이 없다.
                     if !isUtility {
                         Toggle("기존본에 없던 사람 맨 아래에 추가", isOn: $appendNewRows)
-                            .toggleStyle(.checkbox).font(.callout)
+                            .toggleStyle(.checkbox).font(.body)
                         Toggle("추가한 행에 ‘\(PatchEngine.markerValue)’ 표시 컬럼 넣기", isOn: $markNewRows)
-                            .toggleStyle(.checkbox).font(.callout)
+                            .toggleStyle(.checkbox).font(.body)
                             .disabled(!appendNewRows)
                     }
                     if let errorMessage { errorLabel(errorMessage).frame(maxWidth: 300) }
@@ -3276,31 +3276,31 @@ struct ContentView: View {
             Text("이번에 정리한 컬럼: "
                  + (patch.columns.isEmpty ? "없음"
                     : patch.columns.map { $0.rawValue }.joined(separator: ", ")))
-                .font(.callout).foregroundStyle(.secondary)
+                .font(.body).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             if !patch.addedColumns.isEmpty {
                 Label("원본에 없어 새로 만든 컬럼 \(patch.addedColumns.count)개: "
                       + patch.addedColumns.map { $0.rawValue }.joined(separator: ", "),
                       systemImage: "plus.square.on.square")
-                    .font(.caption).foregroundStyle(Color.accentColor)
+                    .font(.body).foregroundStyle(Color.accentColor)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if patch.unmatchedRows > 0 {
                 Label("이번 데이터에서 짝을 못 찾은 기존 행 \(patch.unmatchedRows)건 — 손대지 않고 그대로 뒀어요.",
                       systemImage: "questionmark.circle")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.body).foregroundStyle(.secondary)
             }
             if patch.keptBlankCount > 0 {
                 Label("새 값이 비어 있어 기존 값을 지킨 셀 \(patch.keptBlankCount)건 — 값이 지워지는 일은 없습니다.",
                       systemImage: "lock.shield")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.body).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Label(patch.changedCellCount == 0
                   ? "바뀐 값 0건 — 원본이 그대로 유지됩니다."
                   : "고르지 않은 컬럼 \(untouched)개와 모든 행은 한 글자도 건드리지 않았습니다.",
                   systemImage: patch.changedCellCount == 0 ? "checkmark.seal.fill" : "checkmark.shield.fill")
-                .font(.callout.weight(.medium))
+                .font(.body.weight(.medium))
                 .foregroundStyle(patch.changedCellCount == 0 ? Color.green : Color.accentColor)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -3324,7 +3324,7 @@ struct ContentView: View {
                 HStack(spacing: 0) {
                     ForEach(headers, id: \.self) { h in
                         Text(h)
-                            .font(.caption.weight(.semibold))
+                            .font(.body.weight(.semibold))
                             .lineLimit(1).truncationMode(.tail).help(h)
                             .frame(width: idHeaders.contains(h) ? 150 : 180, alignment: .leading)
                             .padding(.horizontal, 8).padding(.vertical, 6)
@@ -3361,7 +3361,7 @@ struct ContentView: View {
                     Text("(앞 300행만 표시 · 전체 \(patch.rows.count)행)")
                 }
             }
-            .font(.caption2).foregroundStyle(.secondary)
+            .font(.body).foregroundStyle(.secondary)
             .padding(.horizontal, 10).padding(.vertical, 6)
             .background(.regularMaterial, in: Capsule())
             .padding(8)
@@ -3386,14 +3386,14 @@ struct ContentView: View {
             }
             if r.unmatchedNoPhone > 0 {
                 Text("전화번호·이메일이 모두 없어 중복 검사에서 제외된 행 \(r.unmatchedNoPhone)건.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.body).foregroundStyle(.secondary)
             }
             // 검증 요약: 이 도구가 수정한 셀의 전체 개수. 보고서와 1:1로 대조 가능.
             Label(r.changes.isEmpty
                   ? "값 수정 0건 — 모든 값이 원본 그대로 저장되었습니다."
                   : "값 수정 \(r.changes.count)건 — 전체 내역이 변경 보고서에 기록되어 있습니다.",
                   systemImage: r.changes.isEmpty ? "checkmark.seal.fill" : "doc.text.magnifyingglass")
-                .font(.callout.weight(.medium))
+                .font(.body.weight(.medium))
                 .foregroundStyle(r.changes.isEmpty ? Color.green : Color.accentColor)
         }
     }
@@ -3405,7 +3405,7 @@ struct ContentView: View {
                 HStack(spacing: 0) {
                     ForEach(cols, id: \.self) { c in
                         Text(c.rawValue)
-                            .font(.caption.weight(.semibold))
+                            .font(.body.weight(.semibold))
                             .frame(width: columnWidth(c), alignment: .leading)
                             .padding(.horizontal, 8).padding(.vertical, 6)
                     }
@@ -3416,7 +3416,7 @@ struct ContentView: View {
                     HStack(spacing: 0) {
                         ForEach(cols, id: \.self) { c in
                             Text(row[c])
-                                .font(.caption)
+                                .font(.body)
                                 .lineLimit(1).truncationMode(.tail)
                                 .frame(width: columnWidth(c), alignment: .leading)
                                 .padding(.horizontal, 8).padding(.vertical, 5)
@@ -3452,7 +3452,7 @@ struct ContentView: View {
 
     private func errorLabel(_ message: String) -> some View {
         Label(message, systemImage: "exclamationmark.triangle.fill")
-            .font(.callout).foregroundStyle(.red)
+            .font(.body).foregroundStyle(.red)
             .fixedSize(horizontal: false, vertical: true)
     }
 
@@ -4598,7 +4598,7 @@ struct ColumnDetailView: View {
                          + (!expandRaw && splitCount > 0 ? " · 출처 분리 \(values.count)행" : "")
                          + (changedKinds > 0 ? " · ↪︎ 바뀐 값 \(changedKinds)종" : "")
                          + (anomalyReasons.isEmpty ? "" : " · ⚠︎ 점검 \(anomalyReasons.count)건"))
-                        .font(.subheadline).foregroundStyle(.secondary)
+                        .font(.body).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button("닫기", action: onClose).keyboardShortcut(.cancelAction)
@@ -4651,7 +4651,7 @@ struct ColumnDetailView: View {
                                     // 출처 키: 원본 파일에서 이 행을 찾는 식별자 (Code/Email/행)
                                     Text(dv.refs.isEmpty ? "—"
                                          : dv.refs[0] + (dv.refs.count > 1 ? " 외 \(dv.refs.count - 1)" : ""))
-                                        .font(.subheadline.monospaced())
+                                        .font(.body.monospaced())
                                         .foregroundStyle(dv.refs.isEmpty ? .tertiary : .secondary)
                                         .textSelection(.enabled)
                                         .lineLimit(1).truncationMode(.middle)
@@ -4663,7 +4663,7 @@ struct ColumnDetailView: View {
                                     HStack(spacing: 5) {
                                         if let reason = anomalyReasons[dv.value] {
                                             Image(systemName: "exclamationmark.triangle.fill")
-                                                .font(.subheadline).foregroundStyle(.orange)
+                                                .font(.body).foregroundStyle(.orange)
                                                 .help(reason)
                                         }
                                         Text(dv.value.isEmpty ? "(빈 값)" : dv.value)
@@ -4676,7 +4676,7 @@ struct ColumnDetailView: View {
                                     // 이후 값 (정리·통일 결과)
                                     HStack(spacing: 6) {
                                         Image(systemName: changed ? "arrow.right" : "equal")
-                                            .font(.subheadline)
+                                            .font(.body)
                                             .foregroundStyle(changed ? Color.accentColor : Color.secondary.opacity(0.5))
                                         Text(after(dv).isEmpty ? "(빈 값)" : after(dv))
                                             .font(.body)
@@ -4693,7 +4693,7 @@ struct ColumnDetailView: View {
                                                     Circle().fill(color(for: file))
                                                         .frame(width: 7, height: 7)
                                                     Text(file)
-                                                        .font(.caption2)
+                                                        .font(.body)
                                                         .foregroundStyle(.secondary)
                                                         .lineLimit(1).truncationMode(.middle)
                                                 }
@@ -4704,7 +4704,7 @@ struct ColumnDetailView: View {
                                     }
                                     if !expandRaw {
                                         Text("\(dv.count)")
-                                            .font(.subheadline).monospacedDigit().foregroundStyle(.secondary)
+                                            .font(.body).monospacedDigit().foregroundStyle(.secondary)
                                             .frame(width: 56, alignment: .trailing)
                                     }
                                 }
@@ -4722,7 +4722,7 @@ struct ColumnDetailView: View {
                                 if showsSource { Text("출처 파일").frame(width: 160, alignment: .leading) }
                                 if !expandRaw { Text("건수").frame(width: 56, alignment: .trailing) }
                             }
-                            .font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                            .font(.body.weight(.semibold)).foregroundStyle(.secondary)
                             .padding(.horizontal, 16).padding(.vertical, 6)
                             .background(Color(nsColor: .windowBackgroundColor))
                         }
@@ -4751,7 +4751,7 @@ struct Stat: View {
                 .font(small ? .headline : .title2.weight(.bold))
                 .monospacedDigit()
             Text(label)
-                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                .font(.body).foregroundStyle(.secondary).lineLimit(1)
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
         .background(Color(nsColor: .controlBackgroundColor))
@@ -4769,10 +4769,10 @@ struct InputFileRow: View {
             Image(systemName: "doc.fill").foregroundStyle(Color.accentColor)
             VStack(alignment: .leading, spacing: 1) {
                 Text(input.url.lastPathComponent)
-                    .font(.callout.weight(.medium))
+                    .font(.body.weight(.medium))
                     .lineLimit(1).truncationMode(.middle)
                 Text("\(input.channel.rawValue) (자동 감지)")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.body).foregroundStyle(.secondary)
             }
             Spacer()
             Button(action: onRemove) {
@@ -4878,7 +4878,7 @@ struct ReviewSection<Content: View>: View {
                             .foregroundStyle(.primary)
                             .lineLimit(1).truncationMode(.tail).help(title)
                         Text(subtitle)
-                            .font(.subheadline).foregroundStyle(.secondary)
+                            .font(.body).foregroundStyle(.secondary)
                             .lineLimit(2)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -4892,7 +4892,7 @@ struct ReviewSection<Content: View>: View {
 
             if isChecked {
                 Label("완료", systemImage: "checkmark.circle.fill")
-                    .font(.subheadline.weight(.medium)).foregroundStyle(.green)
+                    .font(.body.weight(.medium)).foregroundStyle(.green)
             } else if !expanded {
                 if resolveCount > 0, let onResolve {
                     // 추천값이 있으면 펼치지 않고도 한 번에 실제로 고친다.
@@ -5008,13 +5008,13 @@ struct ValueUnifyBody: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("\(values.count)개 값 → \(groupCount)개로 통일")
-                    .font(.subheadline).foregroundStyle(.secondary)
+                    .font(.body).foregroundStyle(.secondary)
                 if !allowed.isEmpty {
                     Label(outOfSet == 0
                           ? "정해둔 값으로만 고정됨 (\(allowed.count)종)"
                           : "정해둔 값으로만 고정됨 · 선택 필요 \(outOfSet)종",
                           systemImage: outOfSet == 0 ? "lock.fill" : "exclamationmark.triangle.fill")
-                        .font(.subheadline.weight(.medium))
+                        .font(.body.weight(.medium))
                         .foregroundStyle(outOfSet == 0 ? Color.green : Color.orange)
                         .help("값을 모아둔 컬럼이라, 통일 값은 미리 정해둔 값 중 하나로만 고를 수 있어요.")
                 }
@@ -5040,7 +5040,7 @@ struct ValueUnifyBody: View {
                 Text("건수").frame(width: 56, alignment: .trailing)
                 Text("통일 값").frame(maxWidth: .infinity, alignment: .leading)
             }
-            .font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+            .font(.body.weight(.semibold)).foregroundStyle(.secondary)
 
             ForEach(ordered) { dv in
                 let canonical = mapping[dv.value] ?? dv.value
@@ -5052,7 +5052,7 @@ struct ValueUnifyBody: View {
                         .frame(width: 240, alignment: .leading)
                         .lineLimit(1).truncationMode(.tail).help(dv.value)
                     Text("\(dv.count)")
-                        .font(.subheadline).foregroundStyle(.secondary)
+                        .font(.body).foregroundStyle(.secondary)
                         .frame(width: 56, alignment: .trailing)
                     HStack(spacing: 6) {
                         Image(systemName: !inSet ? "exclamationmark.triangle.fill"
@@ -5089,7 +5089,7 @@ struct ValueUnifyBody: View {
                                 } label: {
                                     Label("추천: \(rec.target) (\(Int(rec.score * 100))%)",
                                           systemImage: "wand.and.stars")
-                                        .font(.subheadline)
+                                        .font(.body)
                                 }
                                 .buttonStyle(.link)
                                 .help("유사도가 가장 높은 허용 값입니다. 누르면 이 값으로 승인됩니다.")
@@ -5171,7 +5171,7 @@ struct ProposalsBody: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if !note.isEmpty {
-                Text(note).font(.subheadline).foregroundStyle(.secondary)
+                Text(note).font(.body).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
@@ -5209,7 +5209,7 @@ struct ProposalsBody: View {
                     Text("건수").frame(width: 56, alignment: .trailing)
                     Text("제안 값 (‘\(targetLabel)’)").frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                .font(.body.weight(.semibold)).foregroundStyle(.secondary)
 
                 ForEach(visible) { p in
                     proposalRow(p)
@@ -5225,7 +5225,7 @@ struct ProposalsBody: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 Image(systemName: "target").foregroundStyle(Color.accentColor)
-                Text("목표 포맷").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                Text("목표 포맷").font(.body.weight(.semibold)).foregroundStyle(.secondary)
                 Text(targetLabel)
                     .font(.body.monospaced().weight(.semibold))
                     .foregroundStyle(Color.accentColor)
@@ -5256,12 +5256,12 @@ struct ProposalsBody: View {
             if let t = phoneTemplate?.wrappedValue, !templateValid {
                 Label("샘플 숫자(01012345678 또는 8210…)가 그대로 들어 있어야 해요 — 지금: \(t)",
                       systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption).foregroundStyle(.orange)
+                    .font(.body).foregroundStyle(.orange)
             } else {
                 Text(phoneTemplate == nil
                      ? "모든 값을 이 날짜 표기로 바꿉니다. 인식 못 한 값만 아래에서 직접 고치세요."
                      : "모든 번호를 이 모양으로 통일합니다. 표준으로 못 바꾼 값만 아래에서 직접 고치세요.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.body).foregroundStyle(.secondary)
             }
         }
         .padding(10)
@@ -5281,7 +5281,7 @@ struct ProposalsBody: View {
                 .lineLimit(1).truncationMode(.middle).help(p.value)
                 .textSelection(.enabled)
             Text("\(p.count)")
-                .font(.subheadline).monospacedDigit().foregroundStyle(.secondary)
+                .font(.body).monospacedDigit().foregroundStyle(.secondary)
                 .frame(width: 56, alignment: .trailing)
             if p.standard {
                 // 표준 도달: 제안 값을 그대로 보여주고 사용자는 읽고 승인만
@@ -5326,12 +5326,12 @@ struct SamplesBody: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if !note.isEmpty {
-                Text(note).font(.subheadline).foregroundStyle(.secondary)
+                Text(note).font(.body).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if !samples.isEmpty {
                 Text("예시 값")
-                    .font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                    .font(.body.weight(.semibold)).foregroundStyle(.secondary)
                 ForEach(Array(samples.enumerated()), id: \.offset) { _, value in
                     Text("• \(value)")
                         .font(.body)
@@ -5340,7 +5340,7 @@ struct SamplesBody: View {
                 }
                 if distinctCount > samples.count {
                     Text("외 \(distinctCount - samples.count)종")
-                        .font(.subheadline).foregroundStyle(.tertiary)
+                        .font(.body).foregroundStyle(.tertiary)
                 }
             }
         }
@@ -5388,7 +5388,7 @@ struct FreeTextBody: View {
                 Text("사유").frame(width: 200, alignment: .leading)
                 Text("수정 값").frame(maxWidth: .infinity, alignment: .leading)
             }
-            .font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+            .font(.body.weight(.semibold)).foregroundStyle(.secondary)
 
             ForEach(anomalies) { f in
                 let current = mapping[f.value] ?? f.value
@@ -5400,15 +5400,15 @@ struct FreeTextBody: View {
                         .lineLimit(1).truncationMode(.middle)
                         .help(f.files.isEmpty ? f.value : "\(f.value)\n출처: \(f.files.joined(separator: ", "))")
                     Text("\(f.count)")
-                        .font(.subheadline).foregroundStyle(.secondary)
+                        .font(.body).foregroundStyle(.secondary)
                         .frame(width: 48, alignment: .trailing)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(f.reason)
-                            .font(.subheadline).foregroundStyle(.secondary)
+                            .font(.body).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                         if f.fixable && !changed {
                             Button("추천: \(f.suggestion)") { mapping[f.value] = f.suggestion }
-                                .buttonStyle(.link).font(.subheadline)
+                                .buttonStyle(.link).font(.body)
                         }
                     }
                     .frame(width: 200, alignment: .leading)
@@ -5463,13 +5463,13 @@ struct FormatBody: View {
                 if failures.isEmpty {
                     Label("모든 값이 형식에 맞습니다 (\(values.count)종).",
                           systemImage: "checkmark.seal.fill")
-                        .font(.callout.weight(.medium)).foregroundStyle(.green)
+                        .font(.body.weight(.medium)).foregroundStyle(.green)
                 } else {
                     failureBox
                 }
             } else if isCustom {
                 Text("맞춰야 할 정규식을 입력하면, 형식에 안 맞는 값만 모아 보여줍니다.")
-                    .font(.callout).foregroundStyle(.secondary)
+                    .font(.body).foregroundStyle(.secondary)
             }
         }
     }
@@ -5480,7 +5480,7 @@ struct FormatBody: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 Image(systemName: "target").foregroundStyle(Color.accentColor)
-                Text("목표 형식").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                Text("목표 형식").font(.body.weight(.semibold)).foregroundStyle(.secondary)
                 Text(preset.rawValue).font(.body.weight(.semibold))
                 if !isCustom {
                     Text(preset.hint)
@@ -5493,7 +5493,7 @@ struct FormatBody: View {
                 Spacer()
                 if patternValid {
                     Text("맞음 \(okCount) · 안 맞음 \(failures.count)")
-                        .font(.callout.monospacedDigit())
+                        .font(.body.monospacedDigit())
                         .foregroundStyle(failures.isEmpty ? Color.green : Color.orange)
                 }
             }
@@ -5501,9 +5501,9 @@ struct FormatBody: View {
                 customField
             } else {
                 HStack(spacing: 6) {
-                    Text(preset.about).font(.caption).foregroundStyle(.secondary)
+                    Text(preset.about).font(.body).foregroundStyle(.secondary)
                     Text(pattern)
-                        .font(.caption.monospaced()).foregroundStyle(.tertiary)
+                        .font(.body.monospaced()).foregroundStyle(.tertiary)
                         .lineLimit(1).truncationMode(.middle)
                         .help("이 컬럼의 값은 전체가 이 정규식과 맞아야 통과합니다: \(pattern)")
                 }
@@ -5522,7 +5522,7 @@ struct FormatBody: View {
                 .font(.body.monospaced())
             if !customPattern.isEmpty && !RegexCleaner.isValid(customPattern) {
                 Label("정규식 형식이 올바르지 않습니다.", systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption).foregroundStyle(.red)
+                    .font(.body).foregroundStyle(.red)
             }
         }
     }
@@ -5536,7 +5536,7 @@ struct FormatBody: View {
                 Text("건수").frame(width: 48, alignment: .trailing)
                 Text("고친 값 (형식에 맞게)").frame(maxWidth: .infinity, alignment: .leading)
             }
-            .font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+            .font(.body.weight(.semibold)).foregroundStyle(.secondary)
 
             ForEach(failures) { dv in
                 let cur = current(dv.value)
@@ -5549,7 +5549,7 @@ struct FormatBody: View {
                         .help(dv.files.isEmpty ? dv.value
                               : "\(dv.value)\n출처: \(dv.files.joined(separator: ", "))")
                     Text("\(dv.count)")
-                        .font(.subheadline).foregroundStyle(.secondary)
+                        .font(.body).foregroundStyle(.secondary)
                         .frame(width: 48, alignment: .trailing)
                     HStack(spacing: 6) {
                         Image(systemName: ok ? "checkmark.circle.fill" : "arrow.right")
@@ -5670,7 +5670,7 @@ struct RegexCleanupSheet: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("‘\(column.rawValue)’ — 패턴으로 한꺼번에 정리하기").font(.headline)
                 Text("적용할 규칙을 고르면 아래에서 바뀔 값을 미리 볼 수 있어요. 위에서부터 차례로 적용됩니다.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.body).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
@@ -5682,7 +5682,7 @@ struct RegexCleanupSheet: View {
     private var presetList: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("자주 쓰는 규칙")
-                .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                .font(.body.weight(.semibold)).foregroundStyle(.secondary)
             ForEach(RegexLibrary.presets) { preset in
                 Toggle(isOn: Binding(
                     get: { selected.contains(preset.id) },
@@ -5690,13 +5690,13 @@ struct RegexCleanupSheet: View {
                 )) {
                     VStack(alignment: .leading, spacing: 1) {
                         HStack(spacing: 8) {
-                            Text(preset.name).font(.callout.weight(.medium))
+                            Text(preset.name).font(.body.weight(.medium))
                             Text(preset.pattern)
-                                .font(.caption2.monospaced()).foregroundStyle(.tertiary)
+                                .font(.body.monospaced()).foregroundStyle(.tertiary)
                                 .lineLimit(1).truncationMode(.tail)
                         }
                         Text("\(preset.summary)  \(preset.example)")
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(.body).foregroundStyle(.secondary)
                             .lineLimit(1).truncationMode(.tail)
                     }
                 }
@@ -5708,18 +5708,18 @@ struct RegexCleanupSheet: View {
     private var customRow: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("직접 입력")
-                .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                .font(.body.weight(.semibold)).foregroundStyle(.secondary)
             HStack(spacing: 8) {
                 TextField("패턴 (정규식)", text: $customPattern)
-                    .textFieldStyle(.roundedBorder).font(.callout.monospaced())
-                Image(systemName: "arrow.right").font(.caption2).foregroundStyle(.secondary)
+                    .textFieldStyle(.roundedBorder).font(.body.monospaced())
+                Image(systemName: "arrow.right").font(.body).foregroundStyle(.secondary)
                 TextField("치환할 값 (비우면 삭제)", text: $customReplacement)
-                    .textFieldStyle(.roundedBorder).font(.callout.monospaced())
+                    .textFieldStyle(.roundedBorder).font(.body.monospaced())
                     .frame(width: 180)
             }
             if let customError {
                 Label(customError, systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption).foregroundStyle(.red)
+                    .font(.body).foregroundStyle(.red)
             }
         }
     }
@@ -5727,7 +5727,7 @@ struct RegexCleanupSheet: View {
     private var targetRow: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("목표 패턴 (선택) — 정리 후 이 형태가 아니면 ‘실패’로 표시")
-                .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                .font(.body.weight(.semibold)).foregroundStyle(.secondary)
             HStack(spacing: 8) {
                 ForEach(Self.targetPresets, id: \.label) { preset in
                     Button(preset.label) { targetPattern = preset.pattern }
@@ -5736,11 +5736,11 @@ struct RegexCleanupSheet: View {
                 }
                 Divider().frame(height: 16)
                 TextField("패턴 (정규식)", text: $targetPattern)
-                    .textFieldStyle(.roundedBorder).font(.callout.monospaced())
+                    .textFieldStyle(.roundedBorder).font(.body.monospaced())
             }
             if let targetError {
                 Label(targetError, systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption).foregroundStyle(.red)
+                    .font(.body).foregroundStyle(.red)
             }
         }
     }
@@ -5751,7 +5751,7 @@ struct RegexCleanupSheet: View {
             HStack {
                 Label(failures.isEmpty ? "목표 패턴에 모두 일치" : "패턴 불일치(실패) \(failures.count)종",
                       systemImage: failures.isEmpty ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
-                    .font(.caption.weight(.semibold))
+                    .font(.body.weight(.semibold))
                     .foregroundStyle(failures.isEmpty ? Color.green : Color.orange)
                 Spacer()
             }
@@ -5760,17 +5760,17 @@ struct RegexCleanupSheet: View {
                     ForEach(failures) { c in
                         HStack(spacing: 8) {
                             Text(c.from.isEmpty ? "(빈 값)" : c.from)
-                                .font(.callout)
+                                .font(.body)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .lineLimit(1).truncationMode(.middle).help(c.from)
                             Image(systemName: "arrow.right")
-                                .font(.caption2).foregroundStyle(.secondary)
+                                .font(.body).foregroundStyle(.secondary)
                             Text(c.to.isEmpty ? "(빈 값)" : c.to)
-                                .font(.callout).foregroundStyle(.orange)
+                                .font(.body).foregroundStyle(.orange)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .lineLimit(1).truncationMode(.middle).help(c.to)
                             Text("\(c.count)")
-                                .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                                .font(.body).monospacedDigit().foregroundStyle(.secondary)
                                 .frame(width: 44, alignment: .trailing)
                         }
                         .padding(.vertical, 5)
@@ -5789,35 +5789,35 @@ struct RegexCleanupSheet: View {
         let total = values.count
         HStack {
             Text("미리보기")
-                .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                .font(.body.weight(.semibold)).foregroundStyle(.secondary)
             Spacer()
             Text(activePresets.isEmpty ? "규칙을 선택하세요"
                  : "변경 \(changes.count)종 / 전체 \(total)종")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.body).foregroundStyle(.secondary)
         }
 
         if !activePresets.isEmpty {
             if changes.isEmpty {
                 Text("선택한 규칙으로 바뀌는 값이 없습니다.")
-                    .font(.callout).foregroundStyle(.secondary)
+                    .font(.body).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(changes) { c in
                         HStack(spacing: 8) {
                             Text(c.from.isEmpty ? "(빈 값)" : c.from)
-                                .font(.callout)
+                                .font(.body)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .lineLimit(1).truncationMode(.middle).help(c.from)
                             Image(systemName: "arrow.right")
-                                .font(.caption2).foregroundStyle(.secondary)
+                                .font(.body).foregroundStyle(.secondary)
                             Text(c.to.isEmpty ? "(빈 값)" : c.to)
-                                .font(.callout)
+                                .font(.body)
                                 .foregroundStyle(c.to.isEmpty ? .secondary : Color.accentColor)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .lineLimit(1).truncationMode(.middle).help(c.to)
                             Text("\(c.count)")
-                                .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                                .font(.body).monospacedDigit().foregroundStyle(.secondary)
                                 .frame(width: 44, alignment: .trailing)
                         }
                         .padding(.vertical, 5)
@@ -5834,7 +5834,7 @@ struct RegexCleanupSheet: View {
     private var footer: some View {
         HStack {
             Text("적용하면 위 변경이 ‘\(column.rawValue)’ 값에 반영됩니다.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.body).foregroundStyle(.secondary)
             Spacer()
             Button("취소", action: onClose)
             Button("적용 (\(changes.count))") {
@@ -5911,7 +5911,7 @@ struct MappingTableSheet: View {
     private var stepBar: some View {
         HStack(spacing: 10) {
             stepChip(index: 1, title: "모으기 규칙 적기", active: step == .rules, done: step == .preview)
-            Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
+            Image(systemName: "chevron.right").font(.body).foregroundStyle(.tertiary)
             stepChip(index: 2, title: "적용 결과 확인", active: step == .preview, done: false)
             Spacer()
         }
@@ -5924,14 +5924,14 @@ struct MappingTableSheet: View {
                 Circle().fill(active ? Color.accentColor : (done ? Color.green : Color.secondary.opacity(0.25)))
                     .frame(width: 20, height: 20)
                 if done {
-                    Image(systemName: "checkmark").font(.caption2.weight(.bold)).foregroundStyle(.white)
+                    Image(systemName: "checkmark").font(.body.weight(.bold)).foregroundStyle(.white)
                 } else {
-                    Text("\(index)").font(.caption2.weight(.bold))
+                    Text("\(index)").font(.body.weight(.bold))
                         .foregroundStyle(active ? .white : .secondary)
                 }
             }
             Text(title)
-                .font(.subheadline.weight(active ? .semibold : .regular))
+                .font(.body.weight(active ? .semibold : .regular))
                 .foregroundStyle(active ? .primary : .secondary)
         }
     }
@@ -5941,7 +5941,7 @@ struct MappingTableSheet: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("‘\(column.rawValue)’ — 여러 값을 하나로 모으기").font(.headline)
                 Text("한 줄에 하나씩 ‘원본 값 → 모을 값’ 형태로 적거나 붙여넣으세요. 구분자는 탭·→·:·쉼표 모두 됩니다.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.body).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
@@ -5956,11 +5956,11 @@ struct MappingTableSheet: View {
         return HStack(spacing: 12) {
             Label(done ? "모든 값이 매핑됨" : "미매핑 \(uncovered.count)종",
                   systemImage: done ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
-                .font(.callout.weight(.semibold))
+                .font(.body.weight(.semibold))
                 .foregroundStyle(done ? Color.green : Color.orange)
             Text("전체 \(values.count)종 · 매핑 \(coveredCount)종 · 규칙 \(parsed.pairs.count)개"
                  + (parsed.skipped.isEmpty ? "" : " · 못 읽은 줄 \(parsed.skipped.count)개"))
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.body).foregroundStyle(.secondary)
             Spacer()
             if !recommendableUncovered.isEmpty {
                 Button {
@@ -5992,9 +5992,9 @@ struct MappingTableSheet: View {
                 HStack(spacing: 10) {
                     Image(systemName: "checkmark.seal.fill").foregroundStyle(Color.accentColor)
                     VStack(alignment: .leading, spacing: 1) {
-                        Text("\(label) 있음").font(.callout.weight(.medium))
+                        Text("\(label) 있음").font(.body.weight(.medium))
                         Text("사양서의 공식 규칙 \(pairs.count)개를 한 번에 채웁니다. 채운 뒤 수정할 수 있어요.")
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(.body).foregroundStyle(.secondary)
                     }
                     Spacer()
                     Button(action: fillPreset) {
@@ -6006,7 +6006,7 @@ struct MappingTableSheet: View {
                 .background(RoundedRectangle(cornerRadius: 8).fill(Color.accentColor.opacity(0.08)))
             }
             HStack {
-                Text("모으기 규칙 (원본 → 모을 값)").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                Text("모으기 규칙 (원본 → 모을 값)").font(.body.weight(.semibold)).foregroundStyle(.secondary)
                 Spacer()
                 Button { loadFile() } label: {
                     Label("파일 불러오기", systemImage: "doc.badge.plus")
@@ -6017,11 +6017,11 @@ struct MappingTableSheet: View {
                 }
             }
             TextEditor(text: $text)
-                .font(.callout.monospaced())
+                .font(.body.monospaced())
                 .padding(6)
                 .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.secondary.opacity(0.25)))
             Text("예) 서울특별시 → 서울")
-                .font(.caption2).foregroundStyle(.tertiary)
+                .font(.body).foregroundStyle(.tertiary)
         }
         .padding(16)
         .frame(maxWidth: .infinity)
@@ -6030,13 +6030,13 @@ struct MappingTableSheet: View {
     private var previewPane: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("적용 결과 미리보기")
-                .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                .font(.body.weight(.semibold)).foregroundStyle(.secondary)
             HStack(spacing: 8) {
                 Text("원본 값").frame(maxWidth: .infinity, alignment: .leading)
                 Text("건수").frame(width: 44, alignment: .trailing)
                 Text("→ 통일").frame(maxWidth: .infinity, alignment: .leading)
             }
-            .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            .font(.body.weight(.semibold)).foregroundStyle(.secondary)
 
             ScrollView {
                 LazyVStack(spacing: 0) {
@@ -6044,19 +6044,19 @@ struct MappingTableSheet: View {
                         let hit = lookup[dv.value]
                         HStack(spacing: 8) {
                             Text(dv.value.isEmpty ? "(빈 값)" : dv.value)
-                                .font(.callout)
+                                .font(.body)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .lineLimit(1).truncationMode(.middle).help(dv.value)
                             Text("\(dv.count)")
-                                .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                                .font(.body).monospacedDigit().foregroundStyle(.secondary)
                                 .frame(width: 44, alignment: .trailing)
                             HStack(spacing: 4) {
                                 Image(systemName: hit == nil ? "minus" : "arrow.right")
-                                    .font(.caption2)
+                                    .font(.body)
                                     .foregroundStyle(hit == nil ? Color.orange : Color.accentColor)
                                 if let hit {
                                     Text(hit)
-                                        .font(.callout)
+                                        .font(.body)
                                         .lineLimit(1).truncationMode(.middle)
                                 } else {
                                     // 미매핑: 유사도순으로 정렬된 통일 값 중 하나를 골라 배정.
@@ -6079,7 +6079,7 @@ struct MappingTableSheet: View {
                                     } label: {
                                         Label(rec.map { "추천: \($0.target)" } ?? "선택…",
                                               systemImage: rec == nil ? "chevron.up.chevron.down" : "wand.and.stars")
-                                            .font(.callout)
+                                            .font(.body)
                                             .foregroundStyle(Color.orange)
                                             .lineLimit(1)
                                     }
@@ -6108,7 +6108,7 @@ struct MappingTableSheet: View {
                 Text(parsed.pairs.isEmpty
                      ? "규칙을 한 줄 이상 적으면 다음 단계로 갈 수 있어요."
                      : "규칙 \(parsed.pairs.count)개 준비됨 · 전체 \(values.count)종 중 \(coveredCount)종 반영 예정")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.body).foregroundStyle(.secondary)
                 Spacer()
                 Button("취소", action: onClose)
                 Button {
@@ -6131,7 +6131,7 @@ struct MappingTableSheet: View {
                 Text(uncovered.isEmpty
                      ? "모든 값이 반영됩니다. 적용하면 ‘\(column.rawValue)’에 규칙 \(parsed.pairs.count)개가 적용돼요."
                      : "아직 안 정해진 값 \(uncovered.count)종 — 위에서 배정하거나 그대로 둘 수 있어요.")
-                    .font(.caption).foregroundStyle(uncovered.isEmpty ? Color.secondary : Color.orange)
+                    .font(.body).foregroundStyle(uncovered.isEmpty ? Color.secondary : Color.orange)
                 Button("취소", action: onClose)
                 Button("적용 (\(parsed.pairs.count))") {
                     for p in parsed.pairs { mapping[p.from] = p.to }
@@ -6205,7 +6205,7 @@ struct ColumnSourceSheet: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("‘\(column.rawValue)’ 가져오기 설정").font(.headline)
                     Text("각 파일에서 이 컬럼을 만들 원본 컬럼을 고르세요. 여러 개를 고르면 순서대로 이어 붙입니다.")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.body).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer()
@@ -6214,7 +6214,7 @@ struct ColumnSourceSheet: View {
             .padding(16)
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("컬럼 사이를 어떻게 이어 붙일까요?").font(.callout)
+                Text("컬럼 사이를 어떻게 이어 붙일까요?").font(.body)
                 HStack(spacing: 8) {
                     ForEach(Self.separatorPresets, id: \.label) { preset in
                         Button(preset.label) { separatorBinding.wrappedValue = preset.value }
@@ -6250,17 +6250,17 @@ struct ColumnSourceSheet: View {
         let slotCount = min(maxSlots, current.count + 1)
         return VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text(plan.wrappedValue.fileName).font(.callout.weight(.medium))
+                Text(plan.wrappedValue.fileName).font(.body.weight(.medium))
                     .lineLimit(1).truncationMode(.middle).help(plan.wrappedValue.fileName)
                 Spacer()
                 Text("→ \(previewValue(plan.wrappedValue).isEmpty ? "—" : previewValue(plan.wrappedValue))")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.body).foregroundStyle(.secondary)
                     .lineLimit(1).truncationMode(.tail)
             }
             HStack(spacing: 8) {
                 ForEach(0..<slotCount, id: \.self) { i in
                     if i > 0 {
-                        Image(systemName: "plus").font(.caption2).foregroundStyle(.tertiary)
+                        Image(systemName: "plus").font(.body).foregroundStyle(.tertiary)
                     }
                     Picker("", selection: slotBinding(plan, i)) {
                         Text(i == 0 ? "— 없음 —" : "— 추가 —").tag("")
@@ -6530,7 +6530,7 @@ struct PreviewWindowView: View {
                 .font(.headline)
             if model.rows.isEmpty {
                 Text("파일을 올리고 ‘완성본 미리보기’를 누르면 채워집니다.")
-                    .font(.subheadline).foregroundStyle(.secondary)
+                    .font(.body).foregroundStyle(.secondary)
             } else {
                 summaryChips
             }
@@ -6546,34 +6546,34 @@ struct PreviewWindowView: View {
         Text("전체 \(model.rows.count)행"
              + (visibleRows.count == model.rows.count ? "" : " 중 \(visibleRows.count)행 표시")
              + " · OK \(model.checked.count)/\(model.columns.count)컬럼")
-            .font(.subheadline).foregroundStyle(.secondary)
+            .font(.body).foregroundStyle(.secondary)
         if model.needsWorkColumns.isEmpty {
             Label("모든 컬럼 작업 완료", systemImage: "checkmark.seal.fill")
-                .font(.subheadline.weight(.medium))
+                .font(.body.weight(.medium))
                 .foregroundStyle(Color.green)
                 .help("결정할 값이 남은 컬럼이 없습니다.")
         } else {
             Label("작업 필요 \(model.needsWorkColumns.count)컬럼",
                   systemImage: "exclamationmark.triangle.fill")
-                .font(.subheadline.weight(.medium))
+                .font(.body.weight(.medium))
                 .foregroundStyle(Color.orange)
                 .help("아직 결정하지 못한 값이 남은 컬럼: "
                       + model.needsWorkColumns.map(\.rawValue).joined(separator: ", "))
         }
         if model.diffCount > 0 {
             Label("개선된 셀 \(model.diffCount)개", systemImage: "sparkles")
-                .font(.subheadline.weight(.medium))
+                .font(.body.weight(.medium))
                 .foregroundStyle(Color.accentColor)
                 .help("정리 전과 비교해 값이 좋아진 셀 수입니다.")
         }
         if showColors, model.rowFiles.isEmpty {
             Label("행 출처 없음 — 파일 색을 못 그려요", systemImage: "questionmark.circle")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.body).foregroundStyle(.secondary)
                 .help("합쳐진 행이 어느 파일에서 왔는지 정보가 없습니다. 파일을 다시 올리면 표시됩니다.")
         }
         if let f = model.focused {
             Label("보는 중: \(f.rawValue)", systemImage: "eye.fill")
-                .font(.subheadline.weight(.medium))
+                .font(.body.weight(.medium))
                 .foregroundStyle(Color.accentColor)
                 .lineLimit(1)
                 .padding(.horizontal, 8).padding(.vertical, 3)
@@ -6627,7 +6627,7 @@ struct PreviewWindowView: View {
                         } header: {
                             HStack(spacing: 0) {
                                 Text(model.rowFiles.isEmpty ? "행" : "행 · 출처")
-                                    .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                                    .font(.body.weight(.semibold)).foregroundStyle(.secondary)
                                     .frame(width: model.rowFiles.isEmpty ? 56 : 190, alignment: .leading)
                                     .padding(.horizontal, 8).padding(.vertical, 6)
                                 ForEach(Array(model.columns.enumerated()), id: \.element) { idx, c in
@@ -6666,7 +6666,7 @@ struct PreviewWindowView: View {
         let fg: Color = improved ? .accentColor
             : (value.isEmpty ? Color.secondary.opacity(0.5) : .primary)
         return Text(value.isEmpty ? "—" : value)
-            .font(.subheadline)
+            .font(.body)
             .fontWeight(improved ? .medium : .regular)
             .foregroundStyle(fg)
             .lineLimit(1).truncationMode(.tail)
@@ -6688,7 +6688,7 @@ struct PreviewWindowView: View {
         let hasFiles = !model.rowFiles.isEmpty
         return HStack(spacing: 5) {
             Text("\(i + 1)")
-                .font(.caption.monospacedDigit())
+                .font(.body.monospacedDigit())
                 .foregroundStyle(.secondary)
                 .frame(width: 34, alignment: .trailing)
             if hasFiles {
@@ -6697,13 +6697,13 @@ struct PreviewWindowView: View {
                     .frame(width: 3, height: 14)
                 if let badge = model.rowBadge(row: i) {
                     Text(badge)
-                        .font(.caption2.weight(.semibold))
+                        .font(.body.weight(.semibold))
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 4).padding(.vertical, 1)
                         .background(Capsule().fill(Color.secondary.opacity(0.14)))
                 }
                 Text(model.fileLabel(row: i))
-                    .font(.caption)
+                    .font(.body)
                     .foregroundStyle(tint ?? .secondary)
                     .lineLimit(1).truncationMode(.middle)
             }
@@ -6740,19 +6740,19 @@ struct PreviewWindowView: View {
                 .buttonStyle(.plain)
                 .help("이 컬럼 고르기 — 고른 뒤 ‘데이터 정리하기’나 ‘두 컬럼 합치기’를 누르세요.")
                 Text("\(number)")
-                    .font(.caption2.monospacedDigit().weight(.semibold))
+                    .font(.body.monospacedDigit().weight(.semibold))
                     .foregroundStyle(.secondary)
                     .frame(minWidth: 16, alignment: .trailing)
                 Image(systemName: st.icon)
-                    .font(.caption)
+                    .font(.body)
                     .foregroundStyle(showColors ? st.tint : .secondary)
                 Text(c.rawValue)
-                    .font(.subheadline.weight(.semibold))
+                    .font(.body.weight(.semibold))
                     .foregroundStyle(showColors && split ? Color.orange : .primary)
                     .lineLimit(1).truncationMode(.tail)
                 if let badge = st.badge {
                     Text(badge)
-                        .font(.caption2.weight(.bold))
+                        .font(.body.weight(.bold))
                         .foregroundStyle(Color.orange)
                         .padding(.horizontal, 5).padding(.vertical, 1)
                         .background(Capsule().fill(Color.orange.opacity(0.20)))
@@ -6761,13 +6761,13 @@ struct PreviewWindowView: View {
             // 아직 한 칸으로 안 합쳐진 컬럼 — 인라인 미리보기와 같은 둘째 줄.
             if isFocused {
                 Text("지금 볼 컬럼")
-                    .font(.caption2).foregroundStyle(Color.accentColor)
+                    .font(.body).foregroundStyle(Color.accentColor)
                     .padding(.leading, 20)
             } else if let hint = model.pairHints[c] {
                 HStack(spacing: 4) {
                     ownerDots(c)
                     Text(hint)
-                        .font(.caption2).foregroundStyle(split ? .orange : .secondary)
+                        .font(.body).foregroundStyle(split ? .orange : .secondary)
                         .lineLimit(1).truncationMode(.tail)
                 }
                 .padding(.leading, 20)
@@ -6775,12 +6775,12 @@ struct PreviewWindowView: View {
                 HStack(spacing: 4) {
                     ownerDots(c)
                     Text("모든 파일에 있음")
-                        .font(.caption2).foregroundStyle(.secondary)
+                        .font(.body).foregroundStyle(.secondary)
                 }
                 .padding(.leading, 20)
             }
         }
-        .frame(width: 190, height: 34, alignment: .leading)
+        .frame(width: 190, height: 42, alignment: .leading)
         .padding(.horizontal, 8).padding(.vertical, 6)
         .overlay(alignment: .top) {
             if picked { Rectangle().fill(Color.accentColor).frame(height: 3) }
@@ -6808,7 +6808,7 @@ struct PreviewWindowView: View {
     private var selectionActions: some View {
         if !model.selection.isEmpty {
             Text("\(model.selection.count)개 선택")
-                .font(.subheadline.weight(.medium))
+                .font(.body.weight(.medium))
                 .foregroundStyle(Color.accentColor)
             if model.selection.count == 2 {
                 Button { requestMerge() } label: {
@@ -6825,7 +6825,7 @@ struct PreviewWindowView: View {
                 .controlSize(.small)
         } else if !model.rows.isEmpty {
             Text("컬럼 이름 옆 네모를 체크하면 정리·합치기를 할 수 있어요")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.body).foregroundStyle(.secondary)
         }
     }
 
@@ -6869,12 +6869,12 @@ struct PreviewWindowView: View {
         VStack(alignment: .leading, spacing: 4) {
         if !model.fileNames.isEmpty && !model.rowFiles.isEmpty {
             HStack(spacing: 12) {
-                Text("파일 색").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                Text("파일 색").font(.body.weight(.semibold)).foregroundStyle(.secondary)
                 ForEach(Array(model.fileNames.enumerated()), id: \.offset) { idx, name in
                     HStack(spacing: 4) {
                         RoundedRectangle(cornerRadius: 2)
                             .fill(PreviewModel.paletteColor(idx)).frame(width: 10, height: 10)
-                        Text(name).font(.caption).foregroundStyle(.secondary)
+                        Text(name).font(.body).foregroundStyle(.secondary)
                             .lineLimit(1).truncationMode(.middle)
                     }
                 }
@@ -6883,7 +6883,7 @@ struct PreviewWindowView: View {
                         RoundedRectangle(cornerRadius: 2)
                             .fill(Color.secondary.opacity(0.35)).frame(width: 10, height: 10)
                         Text("틀: \(model.baseName)")
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(.body).foregroundStyle(.secondary)
                             .lineLimit(1).truncationMode(.middle)
                     }
                 }
@@ -6903,18 +6903,18 @@ struct PreviewWindowView: View {
                 HStack(spacing: 4) {
                     Circle().fill(Color.secondary.opacity(0.35)).frame(width: 8, height: 8)
                     Text("열 배경·점 = 그 컬럼이 들어 있는 파일")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.body).foregroundStyle(.secondary)
                 }
             }
             HStack(spacing: 4) {
-                Text("—").font(.caption).foregroundStyle(.secondary.opacity(0.6))
-                Text("그 파일엔 없는 값").font(.caption).foregroundStyle(.secondary)
+                Text("—").font(.body).foregroundStyle(.secondary.opacity(0.6))
+                Text("그 파일엔 없는 값").font(.body).foregroundStyle(.secondary)
             }
             Spacer()
             HStack(spacing: 4) {
-                Text("가").font(.caption.weight(.medium)).foregroundStyle(Color.accentColor)
+                Text("가").font(.body.weight(.medium)).foregroundStyle(Color.accentColor)
                 Text("파란 굵은 글씨 = 값이 개선된 셀")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.body).foregroundStyle(.secondary)
             }
         }
         }
@@ -6924,8 +6924,8 @@ struct PreviewWindowView: View {
 
     private func legendItem(_ icon: String, _ tint: Color, _ label: String) -> some View {
         HStack(spacing: 4) {
-            Image(systemName: icon).font(.caption2).foregroundStyle(tint)
-            Text(label).font(.caption).foregroundStyle(.secondary)
+            Image(systemName: icon).font(.body).foregroundStyle(tint)
+            Text(label).font(.body).foregroundStyle(.secondary)
         }
     }
 }

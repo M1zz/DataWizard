@@ -616,3 +616,12 @@
 - 검증: 헤드리스 — 설문 문항 헤더 3개(`성함`/`현재 거주하고 있는 도시를…`/`연락 가능한 번호`)가
   틀의 `Korean Name`/`City`/`Phone Number` 로 모두 자동 연결됨
   (도시는 값 겹침 90%, 이름·전화는 값 모양 75%)
+
+## 글씨 크기 기본을 .body 로
+- [x] `.caption2` / `.caption` / `.footnote` / `.subheadline` / `.callout` 로 지정돼 있던
+      글씨를 전부 **`.body`** 로 (ContentView 230곳 · ExampleRuleSheet 20 · ColumnMatcher 6 ·
+      AppSettings 2 — 총 258곳). 제목(`.headline` / `.title*` / `.largeTitle`)은 그대로
+- [x] 글씨가 커진 만큼 표 칸을 넓힘 — 미리보기 셀 132 → 152, 제안 카드 96 → 120 /
+      110 → 130 / 170 → 190, 창 머리글 높이 34 → 42
+- 확인: 앱을 띄워 창만 캡처해 확인 (파일 칩·합치기 카드·미리보기 표·범례 모두 정상),
+  `xcodebuild ... build` → BUILD SUCCEEDED
