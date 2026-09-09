@@ -45,6 +45,11 @@ struct ContentView: View {
     // 틀에서 ‘컬럼 이름’만 빌려 온 경우 — 값은 올린 파일 것만 들어간다.
     @State private var templateName: String?
     @State private var templateColumns: [UnifiedColumn] = []
+    /// 틀 파일의 컬럼별 값 — 결과에는 안 들어가고, ‘이 컬럼이 저 컬럼이구나’를 가리는 데만 쓴다.
+    @State private var templateValues: [UnifiedColumn: [String]] = [:]
+    /// 자동으로 짝지은 컬럼 (되돌리기용 스냅샷과 함께).
+    @State private var autoMatched: [(source: UnifiedColumn, target: UnifiedColumn)] = []
+    @State private var undoPlans: [FilePlan]?
 
     @State private var referenceName: String?
     @State private var referenceColumns: Set<UnifiedColumn> = []   // 참조에서 인식된 컬럼
@@ -1073,6 +1078,7 @@ struct ContentView: View {
             }
             let rows = plans.reduce(0) { $0 + $1.rows.count }
             let clean = matchSuggestions.isEmpty && partial.isEmpty && shapeConflicts.isEmpty
+                && autoMatched.isEmpty
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text("1. 합치기")
@@ -1093,6 +1099,15 @@ struct ContentView: View {
                     if !common.isEmpty {
                         mergeLine("checkmark.circle.fill", .green,
                                   "공통 컬럼 \(common.count)개는 그대로 겹쳐집니다", nil, nil)
+                    }
+                    if !autoMatched.isEmpty {
+                        mergeLine("wand.and.stars", .accentColor,
+                                  "자동으로 채운 컬럼 \(autoMatched.count)개 — "
+                                  + autoMatched.prefix(3)
+                                      .map { "\($0.source.rawValue) → \($0.target.rawValue)" }
+                                      .joined(separator: " · ")
+                                  + (autoMatched.count > 3 ? " 외" : ""),
+                                  "되돌리기") { undoAutoMatch() }
                     }
                     if !matchSuggestions.isEmpty {
                         mergeLine("arrow.trianglehead.merge", .accentColor,
@@ -1153,6 +1168,21 @@ struct ContentView: View {
             return
         }
         shapeConflicts = computeShapeConflicts()
+        // 컬럼만 빌려 온 틀: 아직 아무 파일도 채우지 못한 틀 컬럼을 후보로 둔다.
+        if !templateColumns.isEmpty {
+            let mine = Set(ColumnReviewBuilder.plainColumns(in: plans))
+            let sources = finalColumns.filter { !templateColumns.contains($0) && mine.contains($0) }
+                .map { (column: $0, values: ColumnReviewBuilder.rawValues($0, in: plans)) }
+            let targets = templateColumns.filter { !mine.contains($0) }
+                .map { (column: $0, values: templateValues[$0] ?? []) }
+                .filter { !$0.values.isEmpty }
+            matchSuggestions = ColumnMatcher.suggest(sources: sources, targets: targets)
+            var samples: [UnifiedColumn: [String]] = [:]
+            for s in sources { samples[s.column] = Array(distinctFew(s.values)) }
+            for t in targets { samples[t.column] = Array(t.values.prefix(6)) }
+            matchSamples = samples
+            return
+        }
         guard baseIsUserFile, base != nil else {
             // 틀이 없으면 올린 파일들끼리 견준다 — 파일A ‘거주지’ ↔ 파일B ‘도시’.
             let (suggestions, samples) = fileToFileSuggestions()
@@ -1185,6 +1215,43 @@ struct ContentView: View {
         }
         for t in targets { samples[t.column] = Array(t.values.prefix(6)) }
         matchSamples = samples
+    }
+
+    private func distinctFew(_ values: [String], _ n: Int = 6) -> [String] {
+        var seen: [String] = []
+        for v in values where !v.isEmpty && !seen.contains(v) {
+            seen.append(v)
+            if seen.count >= n { break }
+        }
+        return seen
+    }
+
+    /// 틀을 잡자마자, 확실한 짝은 사람에게 묻지 않고 바로 채운다.
+    /// (애매한 것만 `짝지어 주기…`로 남긴다. 되돌리기 버튼도 함께 제공.)
+    private func autoMatchTemplateColumns(minScore: Double = 0.7) {
+        guard !templateColumns.isEmpty, !plans.isEmpty else { return }
+        var pairs: [(source: UnifiedColumn, target: UnifiedColumn)] = []
+        var used = Set<UnifiedColumn>()
+        for s in matchSuggestions {
+            guard let best = s.best, best.score >= minScore, !used.contains(best.column) else { continue }
+            // 1·2위가 붙어 있으면 자동으로 정하지 않는다.
+            if s.candidates.count > 1, best.score - s.candidates[1].score < 0.08 { continue }
+            pairs.append((source: s.source, target: best.column))
+            used.insert(best.column)
+        }
+        guard !pairs.isEmpty else { return }
+        undoPlans = plans
+        applyMatches(pairs)
+        autoMatched = pairs
+    }
+
+    /// 자동으로 채운 짝을 되돌린다.
+    private func undoAutoMatch() {
+        guard let snapshot = undoPlans else { return }
+        plans = snapshot
+        undoPlans = nil
+        autoMatched = []
+        rebuildWorkColumns()
     }
 
     /// 올린 파일들끼리 이름만 다른 같은 컬럼 찾기.
@@ -3516,6 +3583,8 @@ struct ContentView: View {
         showAllColumns = false
         proposalIndex = 0
         refreshMatches()
+        // 틀이 있으면, 채울 수 있는 컬럼은 묻지 않고 바로 채운다.
+        if !templateColumns.isEmpty { autoMatchTemplateColumns() }
         includedColumns = focusColumns
         preview.reset()
         refreshPreview()      // 첫 화면 카드가 곧 완성본이라 미리 만들어 둔다
@@ -3653,6 +3722,9 @@ struct ContentView: View {
     private func clearTemplateColumns() {
         templateName = nil
         templateColumns = []
+        templateValues = [:]
+        autoMatched = []
+        undoPlans = nil
         rebuildWorkColumns()
     }
 
@@ -3665,6 +3737,8 @@ struct ContentView: View {
             errorMessage = nil
             templateName = sheet.name
             templateColumns = sheet.columns
+            templateValues = Dictionary(uniqueKeysWithValues:
+                sheet.columns.map { ($0, sheet.distinctValues($0)) })
             // 값을 가져오는 흐름(이어붙이기)과 섞이지 않게 정리한다.
             baseIsUserFile = false
             baseValues = [:]
@@ -3676,6 +3750,7 @@ struct ContentView: View {
             // 결과물 만드는 방식은 그대로(올린 파일을 쌓은 기준선). 컬럼 순서만 이 파일을 따른다.
             columnMode = .patchBase
             rebuildWorkColumns()
+            autoMatchTemplateColumns()   // 채울 수 있는 컬럼은 바로 채운다
             stage = .work
         } catch {
             errorMessage = error.localizedDescription
