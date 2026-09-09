@@ -900,9 +900,9 @@ struct ContentView: View {
 
     private func previewHeaderRow(_ cols: [UnifiedColumn]) -> some View {
         HStack(spacing: 0) {
-            Text("파일")
+            Text("행 · 출처")
                 .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-                .frame(width: 108, alignment: .leading)
+                .frame(width: 150, alignment: .leading)
                 .padding(.horizontal, 8).padding(.vertical, 6)
             ForEach(cols) { col in previewHeaderCell(col) }
         }
@@ -952,16 +952,23 @@ struct ContentView: View {
         let tint = preview.fileTint(row: i)
         let improved = preview.diff[i] ?? []
         return HStack(spacing: 0) {
-            HStack(spacing: 5) {
+            HStack(spacing: 4) {
                 RoundedRectangle(cornerRadius: 2)
                     .fill(tint ?? Color.secondary.opacity(0.35))
                     .frame(width: 3, height: 14)
+                if let badge = preview.rowBadge(row: i) {
+                    Text(badge)
+                        .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                        .padding(.horizontal, 4).padding(.vertical, 1)
+                        .background(Capsule().fill(Color.secondary.opacity(0.14)))
+                }
                 Text(preview.fileLabel(row: i))
                     .font(.caption2).foregroundStyle(tint ?? .secondary)
                     .lineLimit(1).truncationMode(.middle)
             }
-            .frame(width: 108, alignment: .leading)
+            .frame(width: 150, alignment: .leading)
             .padding(.horizontal, 8).padding(.vertical, 5)
+            .help(preview.rowOriginHelp(row: i))
             ForEach(cols) { col in
                 previewBodyCell(col, value: row[col], improved: improved.contains(col))
             }
@@ -1011,6 +1018,15 @@ struct ContentView: View {
                 HStack(spacing: 4) {
                     RoundedRectangle(cornerRadius: 2).fill(fileTint(idx)).frame(width: 10, height: 10)
                     Text(plan.fileName)
+                        .font(.caption2).foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.middle)
+                }
+            }
+            if !preview.baseName.isEmpty {
+                HStack(spacing: 4) {
+                    RoundedRectangle(cornerRadius: 2).fill(Color.secondary.opacity(0.35))
+                        .frame(width: 10, height: 10)
+                    Text("틀: \(preview.baseName)")
                         .font(.caption2).foregroundStyle(.secondary)
                         .lineLimit(1).truncationMode(.middle)
                 }
@@ -3910,6 +3926,7 @@ struct ContentView: View {
         }
         preview.rowFiles = origins
         preview.baseName = baseIsUserFile ? base.name : ""
+        preview.newRows = p.newRowIndices
         preview.fileNames = plans.map(\.fileName)
         sendColumnMarks()
 
@@ -6203,8 +6220,10 @@ final class PreviewModel: ObservableObject {
         case merge(UnifiedColumn, UnifiedColumn)    // 두 컬럼을 한 칸으로
     }
 
-    /// 사용자가 고른 틀 이름 (있으면 출처가 없는 줄을 ‘틀 그대로’로 표시).
+    /// 사용자가 고른 틀 이름 (있으면 그 파일에서 온 행임을 이름으로 보여 준다).
     @Published var baseName = ""
+    /// 이번에 새로 붙인 행 (틀에 없던 사람).
+    @Published var newRows: Set<Int> = []
 
     /// 사용자가 ‘완성본 미리보기’ 버튼을 눌러 연 창인가.
     /// 앱을 켤 때 시스템이 창을 복원해도 이 값이 false면 스스로 닫는다.
@@ -6232,8 +6251,34 @@ final class PreviewModel: ObservableObject {
     func fileLabel(row i: Int) -> String {
         guard i < rowFiles.count else { return "" }
         let f = rowFiles[i]
-        guard f >= 0 else { return baseName.isEmpty ? "새 행" : "틀 그대로" }
+        guard f >= 0 else { return baseName.isEmpty ? "새 행" : baseName }
         return f < fileNames.count ? fileNames[f] : "파일 \(f + 1)"
+    }
+
+    /// 이 줄이 어디서 온 데이터인지 한 문장으로 (툴팁).
+    func rowOriginHelp(row i: Int) -> String {
+        guard i < rowFiles.count else { return "" }
+        let f = rowFiles[i]
+        let from = f >= 0 && f < fileNames.count ? fileNames[f] : ""
+        if f < 0 {
+            return baseName.isEmpty
+                ? "\(i + 1)행 — 새로 붙인 행"
+                : "\(i + 1)행 · 틀 ‘\(baseName)’의 행 — 이번 데이터에 짝이 없어 그대로 뒀습니다."
+        }
+        if newRows.contains(i) {
+            return "\(i + 1)행 · ‘\(from)’에서 새로 붙인 행"
+        }
+        return baseName.isEmpty
+            ? "\(i + 1)행 · ‘\(from)’에서 온 행"
+            : "\(i + 1)행 · 틀 ‘\(baseName)’의 행 — ‘\(from)’의 값으로 채웠습니다."
+    }
+
+    /// 줄 머리에 붙는 짧은 꼬리표 (`신규` / `틀`).
+    func rowBadge(row i: Int) -> String? {
+        guard i < rowFiles.count else { return nil }
+        if newRows.contains(i) { return "신규" }
+        if rowFiles[i] < 0 && !baseName.isEmpty { return "틀" }
+        return nil
     }
 
     /// ‘이대로 확정’이 미해결보다 앞선다 — 검토 화면의 isResolved(체크했으면 끝)와
@@ -6265,7 +6310,7 @@ final class PreviewModel: ObservableObject {
         rows = []; baselineRows = []; diff = [:]; diffCount = 0
         columns = []; checked = []
         rowFiles = []; fileNames = []
-        splitColumns = []; pairHints = [:]; columnOwners = [:]; baseName = ""
+        splitColumns = []; pairHints = [:]; columnOwners = [:]; baseName = ""; newRows = []
         selection = []; request = nil
         openCounts = [:]; decisionColumns = []
         focused = nil
@@ -6415,9 +6460,9 @@ struct PreviewWindowView: View {
                             }
                         } header: {
                             HStack(spacing: 0) {
-                                Text(model.rowFiles.isEmpty ? "행" : "행 · 파일")
+                                Text(model.rowFiles.isEmpty ? "행" : "행 · 출처")
                                     .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                                    .frame(width: model.rowFiles.isEmpty ? 56 : 150, alignment: .leading)
+                                    .frame(width: model.rowFiles.isEmpty ? 56 : 190, alignment: .leading)
                                     .padding(.horizontal, 8).padding(.vertical, 6)
                                 ForEach(Array(model.columns.enumerated()), id: \.element) { idx, c in
                                     headerCell(c, number: idx + 1)
@@ -6484,16 +6529,23 @@ struct PreviewWindowView: View {
                 RoundedRectangle(cornerRadius: 2)
                     .fill(tint ?? Color.secondary.opacity(0.35))
                     .frame(width: 3, height: 14)
+                if let badge = model.rowBadge(row: i) {
+                    Text(badge)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 4).padding(.vertical, 1)
+                        .background(Capsule().fill(Color.secondary.opacity(0.14)))
+                }
                 Text(model.fileLabel(row: i))
                     .font(.caption)
                     .foregroundStyle(tint ?? .secondary)
                     .lineLimit(1).truncationMode(.middle)
             }
         }
-        .frame(width: hasFiles ? 150 : 56, alignment: .leading)
+        .frame(width: hasFiles ? 190 : 56, alignment: .leading)
         .padding(.horizontal, 8).padding(.vertical, 4)
-        .background((tint ?? Color.clear).opacity(tint == nil ? 0 : 0.12))
-        .help(hasFiles ? "\(i + 1)행 · \(model.fileLabel(row: i))" : "\(i + 1)행")
+        .background((tint ?? Color.secondary).opacity(tint == nil ? 0.05 : 0.12))
+        .help(hasFiles ? model.rowOriginHelp(row: i) : "\(i + 1)행")
     }
 
     /// 검토 중인 열의 좌우 세로선. 셀마다 그려도 위아래로 이어져 한 줄로 보인다.
@@ -6657,6 +6709,15 @@ struct PreviewWindowView: View {
                         RoundedRectangle(cornerRadius: 2)
                             .fill(PreviewModel.paletteColor(idx)).frame(width: 10, height: 10)
                         Text(name).font(.caption).foregroundStyle(.secondary)
+                            .lineLimit(1).truncationMode(.middle)
+                    }
+                }
+                if !model.baseName.isEmpty {
+                    HStack(spacing: 4) {
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(Color.secondary.opacity(0.35)).frame(width: 10, height: 10)
+                        Text("틀: \(model.baseName)")
+                            .font(.caption).foregroundStyle(.secondary)
                             .lineLimit(1).truncationMode(.middle)
                     }
                 }
