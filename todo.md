@@ -563,3 +563,14 @@
       `dismiss()`만으로는 안 닫혀서 `AppDelegate.applicationDidFinishLaunching`에서
       제목으로 찾아 닫고, 창을 `isRestorable = false`로 표시 (두 번 연속 실행해 확인)
 - 확인: `xcodebuild ... build` → BUILD SUCCEEDED
+
+## 첫 화면 ‘완성본 미리보기’ 카드가 실제 완성본을 보여주게
+- 그동안 이 카드는 이름과 달리 **올린 파일의 앞 몇 줄을 그대로** 보여 줬다
+  (값 정리 전, 틀도 반영 안 됨). 색과 표시 규칙만 좋았을 뿐 내용이 결과물이 아니었다.
+- [x] 카드가 `PreviewModel`(= 실제 결과표)에서 그리도록 교체 —
+      값 통일·틀 이어붙이기가 반영된 행, 개선된 셀은 파란 굵은 글씨
+- [x] `previewSampleRows` — 결과표에서 **파일마다 골고루** 뽑아 9줄 (어느 파일도 안 빠지게)
+- [x] 부제를 정직하게: `지금 상태로 만들어진 결과입니다 — 전체 N행 중 M줄`
+- [x] 첫 화면에서도 결과가 준비되도록 `adoptWorkPlans`/`onAppear`/`focusColumns` 변경 시 갱신
+- 확인: 앱을 띄워 창만 캡처해 확인 (파일 색·출처 점·`—` 빈칸·틀 표시 모두 정상),
+  `xcodebuild ... build` → BUILD SUCCEEDED

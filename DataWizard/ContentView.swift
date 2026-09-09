@@ -243,6 +243,9 @@ struct ContentView: View {
             }
         }
         .onDrop(of: [.fileURL], isTargeted: $isDropTargeted, perform: acceptDroppedFiles)
+        // 첫 화면 카드가 실제 완성본이므로, 값·선택이 바뀌면 다시 만든다.
+        .onAppear { if preview.rows.isEmpty && !plans.isEmpty { refreshPreview() } }
+        .onChange(of: focusColumns) { _ in refreshPreview() }
     }
 
     private func dropOverlay(_ title: String) -> some View {
@@ -792,13 +795,22 @@ struct ContentView: View {
     /// 몇 번째로 올린 파일인지에 따른 색. 파일 칩·미리보기 줄이 같은 색을 쓴다.
     private func fileTint(_ index: Int) -> Color { PreviewModel.paletteColor(index) }
 
-    /// 미리보기에 보여 줄 줄 — 파일마다 앞에서 몇 줄씩 골고루.
-    private func previewSampleRows() -> [(file: Int, row: [String: String])] {
-        guard !plans.isEmpty else { return [] }
-        let perFile = max(1, 9 / plans.count)
-        var out: [(file: Int, row: [String: String])] = []
-        for (i, plan) in plans.enumerated() {
-            for row in plan.rows.prefix(perFile) { out.append((i, row)) }
+    /// 미리보기에 보여 줄 줄 — **실제 완성본**(정리 결과가 반영된 결과표)에서
+    /// 파일마다 몇 줄씩 골고루 뽑는다. 어느 파일 줄도 안 보이는 일이 없게.
+    private func previewSampleRows(limit: Int = 9) -> [Int] {
+        guard !preview.rows.isEmpty else { return [] }
+        let files = preview.rowFiles
+        guard !files.isEmpty else { return Array(preview.rows.indices.prefix(limit)) }
+        let kinds = max(1, Set(files).count)
+        let perFile = max(1, limit / kinds)
+        var taken: [Int: Int] = [:]
+        var out: [Int] = []
+        for i in preview.rows.indices {
+            let f = i < files.count ? files[i] : -1
+            guard (taken[f] ?? 0) < perFile else { continue }
+            taken[f, default: 0] += 1
+            out.append(i)
+            if out.count >= limit { break }
         }
         return out
     }
@@ -853,23 +865,24 @@ struct ContentView: View {
     /// 지금 합치면 이렇게 나온다 — 실제 값으로 보여 주는 미리보기.
     @ViewBuilder
     private var workPreviewCard: some View {
-        if !plans.isEmpty && !finalColumns.isEmpty {
-            let cols = finalColumns
+        if !plans.isEmpty && !preview.rows.isEmpty {
+            let cols = preview.columns.isEmpty ? finalColumns : preview.columns
             let sample = previewSampleRows()
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text("완성본 미리보기").font(.headline)
-                    Text("지금 합치면 이렇게 나옵니다 — 파일마다 앞 몇 줄")
+                    Text("지금 상태로 만들어진 결과입니다 — 전체 \(preview.rows.count)행 중 \(sample.count)줄")
                         .font(.caption).foregroundStyle(.secondary)
                     Spacer()
                 }
                 ScrollView([.horizontal, .vertical]) {
                     VStack(alignment: .leading, spacing: 0) {
                         previewHeaderRow(cols)
-                        ForEach(sample.indices, id: \.self) { i in
-                            previewBodyRow(cols, sample[i], index: i)
+                        ForEach(sample, id: \.self) { i in
+                            previewBodyRow(cols, at: i)
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .frame(maxHeight: 220)
                 .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -934,23 +947,26 @@ struct ContentView: View {
         .help(splitCaption(col).map { "\(col.rawValue) — \($0)" } ?? col.rawValue)
     }
 
-    private func previewBodyRow(_ cols: [UnifiedColumn],
-                                _ item: (file: Int, row: [String: String]),
-                                index: Int) -> some View {
-        let plan = plans[item.file]
-        let tint = fileTint(item.file)
+    private func previewBodyRow(_ cols: [UnifiedColumn], at i: Int) -> some View {
+        let row = preview.rows[i]
+        let tint = preview.fileTint(row: i)
+        let improved = preview.diff[i] ?? []
         return HStack(spacing: 0) {
             HStack(spacing: 5) {
-                RoundedRectangle(cornerRadius: 2).fill(tint).frame(width: 3, height: 14)
-                Text(plan.fileName)
-                    .font(.caption2).foregroundStyle(tint)
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(tint ?? Color.secondary.opacity(0.35))
+                    .frame(width: 3, height: 14)
+                Text(preview.fileLabel(row: i))
+                    .font(.caption2).foregroundStyle(tint ?? .secondary)
                     .lineLimit(1).truncationMode(.middle)
             }
             .frame(width: 108, alignment: .leading)
             .padding(.horizontal, 8).padding(.vertical, 5)
-            ForEach(cols) { col in previewBodyCell(col, plan: plan, row: item.row) }
+            ForEach(cols) { col in
+                previewBodyCell(col, value: row[col], improved: improved.contains(col))
+            }
         }
-        .background(tint.opacity(0.10))
+        .background(tint == nil ? Color.clear : tint!.opacity(0.10))
     }
 
     /// 이 컬럼이 어느 파일에 있는지 점으로 — 있는 파일은 그 색, 없는 파일은 빈 동그라미.
@@ -969,16 +985,17 @@ struct ContentView: View {
     }
 
     /// 미리보기 셀 한 칸 — 배경색이 그 컬럼의 출처(파일)를 말해 준다.
-    private func previewBodyCell(_ col: UnifiedColumn, plan: FilePlan,
-                                 row: [String: String]) -> some View {
-        let value = plan.isMapped(col) ? plan.compose(col, from: row) : ""
+    private func previewBodyCell(_ col: UnifiedColumn, value: String,
+                                 improved: Bool) -> some View {
         let here = (col == currentProposalColumn)
         let background: Color = here ? Color.accentColor.opacity(0.10)
             : (columnOwnerTint(col)?.opacity(0.07)
                ?? (isSplitColumn(col) ? Color.orange.opacity(0.05) : Color.clear))
         return Text(value.isEmpty ? "—" : value)
             .font(.caption)
-            .foregroundStyle(value.isEmpty ? Color.secondary.opacity(0.5) : .primary)
+            .fontWeight(improved ? .medium : .regular)
+            .foregroundStyle(improved ? Color.accentColor
+                             : (value.isEmpty ? Color.secondary.opacity(0.5) : .primary))
             .lineLimit(1).truncationMode(.tail)
             .frame(width: 132, alignment: .leading)
             .padding(.horizontal, 8).padding(.vertical, 5)
@@ -3458,6 +3475,7 @@ struct ContentView: View {
         refreshMatches()
         includedColumns = focusColumns
         preview.reset()
+        refreshPreview()      // 첫 화면 카드가 곧 완성본이라 미리 만들어 둔다
         stage = .work
     }
 
