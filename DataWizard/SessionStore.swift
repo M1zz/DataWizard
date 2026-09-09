@@ -31,6 +31,9 @@ struct SessionSnapshot: Codable {
     var baseIsUserFile: Bool?
     /// 틀과 이번 데이터를 짝지을 컬럼 (nil이면 Code→전화→이메일 자동).
     var matchColumn: String?
+    /// 컬럼 이름만 빌려 온 틀 (값은 안 가져옴).
+    var templateName: String?
+    var templateColumns: [String]?
 
     struct FileSnapshot: Codable {
         var path: String

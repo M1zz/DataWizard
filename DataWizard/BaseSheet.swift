@@ -125,9 +125,15 @@ extension BaseSheet {
     /// 같은 이름의 헤더는 자동으로 같은 칸에 들어가고, 그 파일에 없는 컬럼은 빈칸으로
     /// 남는다. 이 시트를 기준선으로 삼으면, 값 정리 결과를 행 순서 그대로 덮어써서
     /// ‘고른 컬럼만 바뀐 합본’을 만들 수 있다.
-    static func stacked(_ plans: [FilePlan], name: String) -> BaseSheet {
+    /// `template`을 주면 그 컬럼 이름·순서를 먼저 깔고, 파일에만 있는 컬럼을 뒤에 붙인다.
+    /// (틀에서 **컬럼명만** 가져오는 흐름 — 틀의 값은 한 줄도 들어오지 않는다.)
+    static func stacked(_ plans: [FilePlan], name: String,
+                        template: [UnifiedColumn] = []) -> BaseSheet {
         var headers: [String] = []
         var seenHeader = Set<String>()
+        for col in template where seenHeader.insert(col.rawValue).inserted {
+            headers.append(col.rawValue)
+        }
         for plan in plans {
             for h in plan.headers where seenHeader.insert(h).inserted { headers.append(h) }
         }

@@ -42,6 +42,10 @@ struct ContentView: View {
     @State private var includedColumns: Set<UnifiedColumn> = []
     // 이전에 완성한 보고서를 ‘참조 파일’로 불러오면, 그 헤더로 남길 컬럼을 맞춘다.
     // 예: 2분기 보고서를 넣으면 7·8·9월 데이터도 같은 컬럼 구성으로 정렬된다.
+    // 틀에서 ‘컬럼 이름’만 빌려 온 경우 — 값은 올린 파일 것만 들어간다.
+    @State private var templateName: String?
+    @State private var templateColumns: [UnifiedColumn] = []
+
     @State private var referenceName: String?
     @State private var referenceColumns: Set<UnifiedColumn> = []   // 참조에서 인식된 컬럼
     @State private var referenceUnmatched: [String] = []           // 스키마에 없던 헤더
@@ -271,7 +275,11 @@ struct ContentView: View {
                 Text("컬럼 \(finalColumns.count)개 — 같은 이름의 컬럼끼리 자동으로 맞춰집니다. 고르지 않은 컬럼은 손대지 않아요.")
                     .font(.callout).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                if baseIsUserFile, let sheet = base {
+                if let templateName {
+                    Text(templateCoverageLine(templateName))
+                        .font(.caption).foregroundStyle(Color.accentColor)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if baseIsUserFile, let sheet = base {
                     Text(baseCoverageLine(sheet))
                         .font(.caption).foregroundStyle(Color.accentColor)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1298,6 +1306,18 @@ struct ContentView: View {
         scheduleSave()
     }
 
+    /// 컬럼만 빌려 온 틀: 그 컬럼을 이번 파일이 얼마나 채우는지 한 줄로.
+    private func templateCoverageLine(_ name: String) -> String {
+        let mine = Set(ColumnReviewBuilder.plainColumns(in: plans))
+        let filled = templateColumns.filter { mine.contains($0) }.count
+        let empty = templateColumns.count - filled
+        let extra = finalColumns.filter { !templateColumns.contains($0) }.count
+        var line = "틀 ‘\(name)’의 컬럼 \(templateColumns.count)개 중 \(filled)개를 이번 파일이 채웁니다"
+        if empty > 0 { line += " · \(empty)개는 빈칸" }
+        if extra > 0 { line += " · 틀에 없는 컬럼 \(extra)개는 뒤에 붙습니다" }
+        return line
+    }
+
     /// 틀을 기준으로 이번 파일들이 어디까지 채우는지 한 줄로.
     private func baseCoverageLine(_ sheet: BaseSheet) -> String {
         let baseCols = sheet.columns
@@ -1427,22 +1447,22 @@ struct ContentView: View {
     @ViewBuilder
     private var workBaseInvite: some View {
         Group {
-            if baseIsUserFile, let base {
+            if let templateName {
                 HStack(spacing: 10) {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.title3).foregroundStyle(.green)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("1. 틀: \(base.name)")
+                        Text("1. 틀: \(templateName) — 컬럼 \(templateColumns.count)개")
                             .font(.callout.weight(.semibold))
                             .lineLimit(1).truncationMode(.middle)
-                        Text("이 파일의 컬럼 구성과 값을 그대로 두고, 이번에 고친 컬럼만 덮어씁니다. 이제 아래 2번 칸에 합칠 파일을 올려 주세요.")
+                        Text("이 파일에서는 **컬럼 이름만** 가져옵니다 — 값은 올린 파일 것만 들어가요. 이제 아래 2번 칸에 합칠 파일을 올려 주세요.")
                             .font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer(minLength: 8)
-                    Button("바꾸기…") { chooseBase() }
+                    Button("바꾸기…") { chooseTemplateColumns() }
                         .controlSize(.small)
-                    Button("해제") { clearUserBase() }
+                    Button("해제") { clearTemplateColumns() }
                         .controlSize(.small)
                 }
                 .padding(.horizontal, 14).padding(.vertical, 12)
@@ -1459,12 +1479,12 @@ struct ContentView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("1. 맞출 틀이 있나요?  —  없으면 건너뛰세요")
                             .font(.callout.weight(.semibold))
-                        Text("전에 만들어 둔 통합본이나 채워 넣을 양식이 있으면 여기에 먼저 끌어다 놓으세요.\n그 파일은 합쳐지지 않고 결과물의 틀이 됩니다 — 컬럼 구성·값은 그대로, 이번에 고친 컬럼만 덮어써요.")
+                        Text("전에 만들어 둔 통합본이나 채워 넣을 양식이 있으면 여기에 먼저 끌어다 놓으세요.\n그 파일에서는 **컬럼 이름만** 가져옵니다 — 값은 올린 파일 것만 들어가고, 결과는 그 컬럼 구성으로 나옵니다.")
                             .font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer(minLength: 8)
-                    Button("틀 파일 고르기…") { chooseBase() }
+                    Button("틀 파일 고르기…") { chooseTemplateColumns() }
                         .controlSize(.small)
                 }
                 .padding(.horizontal, 14).padding(.vertical, 12)
@@ -2066,7 +2086,13 @@ struct ContentView: View {
 
     private func templateGap(_ review: ColumnReview) -> TemplateGap {
         var gap = TemplateGap()
-        guard baseIsUserFile, base != nil, review.kind != .derived else { return gap }
+        guard review.kind != .derived else { return gap }
+        // 컬럼 이름만 빌려 온 틀: 그 목록에 없으면 ‘새 컬럼’.
+        if !templateColumns.isEmpty {
+            gap.isNew = !templateColumns.contains(review.column)
+            return gap
+        }
+        guard baseIsUserFile, base != nil else { return gap }
         guard let known = baseValues[review.column] else {
             gap.isNew = true
             return gap
@@ -3470,7 +3496,11 @@ struct ContentView: View {
         columnMode = .patchBase
         patch = nil
         result = nil
-        finalColumns = ColumnReviewBuilder.plainColumns(in: built)
+        if !baseIsUserFile {
+            base = BaseSheet.stacked(built, name: stackedName(built), template: templateColumns)
+        }
+        finalColumns = (!baseIsUserFile ? base?.columns : nil)
+            ?? ColumnReviewBuilder.plainColumns(in: built)
         reviews = ColumnReviewBuilder.plainReviews(in: built)
         checked = []
         valueMap = [:]
@@ -3479,9 +3509,6 @@ struct ContentView: View {
         formatChoice = [:]
         customFormat = [:]
         seedValueMap(from: reviews)
-        if !baseIsUserFile {
-            base = BaseSheet.stacked(built, name: stackedName(built))
-        }
         // 기본은 아무것도 안 고른 상태 — 제안 카드에서 하나씩 고르게 한다.
         // (여러 개를 한 번에 하고 싶으면 목록을 펴서 직접 고르면 된다.)
         focusColumns = []
@@ -3602,18 +3629,77 @@ struct ContentView: View {
         loadBase(url)
     }
 
-    /// 틀 칸에 파일을 끌어다 놓았을 때 — 합칠 파일이 아니라 ‘틀’로 받는다.
+    /// 틀 칸에 파일을 끌어다 놓았을 때 — 합칠 파일이 아니라 ‘틀’(컬럼 이름)로 받는다.
     private func acceptBaseDrop(_ providers: [NSItemProvider]) -> Bool {
         guard let provider = providers.first else { return false }
         provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier) { item, _ in
             guard let data = item as? Data,
                   let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
-            DispatchQueue.main.async { loadBase(url) }
+            DispatchQueue.main.async { loadTemplateColumns(url) }
         }
         return true
     }
 
+    /// 틀 파일 고르기 — 컬럼 이름만 가져온다.
+    private func chooseTemplateColumns() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.commaSeparatedText, .text, xlsxType]
+        panel.allowsMultipleSelection = false
+        panel.message = "결과물의 컬럼 구성으로 삼을 파일을 고르세요. 이 파일에서는 컬럼 이름만 가져옵니다."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        loadTemplateColumns(url)
+    }
+
+    private func clearTemplateColumns() {
+        templateName = nil
+        templateColumns = []
+        rebuildWorkColumns()
+    }
+
     /// 만들던 통합본·양식을 ‘틀’로 삼는다. 합칠 파일 목록은 건드리지 않는다.
+    /// 틀에서 **컬럼 이름만** 가져온다 — 그 파일의 값은 한 줄도 들어오지 않는다.
+    /// 결과물은 올린 파일들을 세로로 쌓은 것이고, 컬럼 구성만 이 파일을 따른다.
+    private func loadTemplateColumns(_ url: URL) {
+        do {
+            let sheet = try BaseSheetLoader.load(url: url)
+            errorMessage = nil
+            templateName = sheet.name
+            templateColumns = sheet.columns
+            // 값을 가져오는 흐름(이어붙이기)과 섞이지 않게 정리한다.
+            baseIsUserFile = false
+            baseValues = [:]
+            baseCategorical = []
+            matchColumn = nil
+            patch = nil
+            result = nil
+            clearReference()
+            // 결과물 만드는 방식은 그대로(올린 파일을 쌓은 기준선). 컬럼 순서만 이 파일을 따른다.
+            columnMode = .patchBase
+            rebuildWorkColumns()
+            stage = .work
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// 틀의 컬럼 순서를 반영해 컬럼 목록과 기준선을 다시 만든다.
+    private func rebuildWorkColumns() {
+        guard !plans.isEmpty else {
+            base = nil
+            finalColumns = []
+            return
+        }
+        base = BaseSheet.stacked(plans, name: stackedName(plans), template: templateColumns)
+        finalColumns = base?.columns ?? ColumnReviewBuilder.plainColumns(in: plans)
+        reviews = ColumnReviewBuilder.plainReviews(in: plans)
+        seedValueMap(from: reviews)
+        focusColumns = focusColumns.intersection(Set(finalColumns))
+        includedColumns = focusColumns
+        proposalIndex = 0
+        refreshMatches()
+        refreshPreview()
+    }
+
     private func loadBase(_ url: URL) {
         do {
             let sheet = try BaseSheetLoader.load(url: url)
@@ -3788,7 +3874,8 @@ struct ContentView: View {
             let raw = MergeEngine(plans: plans, valueMap: [:], phoneTemplate: Normalizer.defaultPhoneTemplate)
             preview.baselineRows = (try? raw.run())?.rows ?? []
         }
-        let cols = visibleFinalColumns
+        // 아직 고른 컬럼이 없으면(첫 화면) 전체 컬럼을 보여 준다 — 완성본이니까.
+        let cols = visibleFinalColumns.isEmpty ? finalColumns : visibleFinalColumns
         var diff: [Int: Set<UnifiedColumn>] = [:]
         var n = 0
         for (i, row) in rows.enumerated() where i < preview.baselineRows.count {
@@ -4063,7 +4150,9 @@ struct ContentView: View {
             focusColumns: focusColumns.map { $0.rawValue },
             base: baseSnap,
             baseIsUserFile: baseIsUserFile,
-            matchColumn: matchColumn?.rawValue)
+            matchColumn: matchColumn?.rawValue,
+            templateName: templateName,
+            templateColumns: templateColumns.map { $0.rawValue })
     }
 
     /// 변경이 잦아도 0.8초 뒤 한 번만 저장 (디바운스).
@@ -4141,6 +4230,8 @@ struct ContentView: View {
             base = BaseSheet.stacked(plans, name: stackedName(plans))
         }
         matchColumn = s.matchColumn.flatMap(col)
+        templateName = s.templateName
+        templateColumns = (s.templateColumns ?? []).compactMap(col)
         indexBase()
         refreshMatches()
         patch = nil
