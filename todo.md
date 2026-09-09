@@ -547,3 +547,19 @@
 - [x] 색을 진하게: 행 배경 0.08 → 0.14, 열 머리글 출처색 0.16 → 0.22, 셀 0.07 → 0.10
 - [x] 그래도 못 그리면 이유를 표시: 툴바에 `행 출처 없음 — 파일 색을 못 그려요`
 - 확인: `xcodebuild ... build` → BUILD SUCCEEDED
+
+### 큰 창에 파일 색이 안 나오던 진짜 원인 (실행해서 확인)
+빌드한 앱을 직접 띄워 창을 캡처해 확인했다. 창에는 새로 넣어 둔 진단 문구
+`행 출처 없음 — 파일 색을 못 그려요` 가 떠 있었다 → `PreviewModel.rowFiles` 가 비어 있었음.
+- 원인: **사용자가 고른 틀(`제출자(336명).csv`)에 이어붙이는 중**이라 미리보기의 행이
+  올린 파일이 아니라 ‘틀의 행 + 새로 붙인 행’이었다. 틀에는 행 출처가 없으니
+  `rowOrigins`가 비고, 예전 보정(`!baseIsUserFile`)도 걸리지 않았다.
+- [x] `PatchResult.sourceRows` — 출력 행마다 어느 새 데이터 행에서 왔는지 (-1 = 짝 없음)
+      · 짝을 찾은 틀 행은 **그 값을 넣어 준 파일 색**으로
+      · 새로 붙인 행은 그 행이 온 파일 색으로
+      · 짝을 못 찾아 기존 값 그대로인 행은 회색 `틀 그대로` (`PreviewModel.baseName`)
+- [x] `refreshPatchPreview`가 새 데이터의 파일 출처(`MergeResult.origins`)를 함께 받아 매핑
+- [x] 앱 시작 시 미리보기 창이 뜨던 것도 이번에 실제로 확인·수정 —
+      `dismiss()`만으로는 안 닫혀서 `AppDelegate.applicationDidFinishLaunching`에서
+      제목으로 찾아 닫고, 창을 `isRestorable = false`로 표시 (두 번 연속 실행해 확인)
+- 확인: `xcodebuild ... build` → BUILD SUCCEEDED

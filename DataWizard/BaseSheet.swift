@@ -168,6 +168,9 @@ struct PatchResult {
     var keptBlankCount = 0                 // 새 값이 비어 있어 기존 값을 지킨 셀
     var addedColumns: [UnifiedColumn] = [] // 기존본에 없어 새로 만든 컬럼
     var changes: [ChangeRecord] = []
+    /// 출력 행마다 어느 새 데이터 행에서 왔는지 (-1 = 짝이 없어 기존 값 그대로).
+    /// 미리보기에서 ‘이 줄은 어느 파일에서 온 값인가’를 색으로 보여 주는 데 쓴다.
+    var sourceRows: [Int] = []
 }
 
 /// 기존 행과 새 행을 어떻게 짝지을지.
@@ -244,6 +247,7 @@ enum PatchEngine {
         }
         var result = PatchResult(headers: headers, rows: [], columns: columns, addedColumns: added)
         var consumed = Set<Int>()
+        var sourceRows = Array(repeating: -1, count: base.rows.count)
 
         /// 기존 행 하나의 짝을 찾는다.
         func partner(of brow: [String: String], at bi: Int) -> Int? {
@@ -274,6 +278,7 @@ enum PatchEngine {
         for (bi, brow) in base.rows.enumerated() {
             guard let m = partner(of: brow, at: bi) else { result.unmatchedRows += 1; continue }
             consumed.insert(m)
+            sourceRows[bi] = m
             result.matchedRows += 1
 
             let ref = base.rowRef(brow, index: bi)
@@ -307,6 +312,7 @@ enum PatchEngine {
                 if markNewRows { row[markerHeader] = markerValue }
                 result.newRowIndices.insert(out.count)
                 out.append(row)
+                sourceRows.append(i)
                 result.appendedRows += 1
             }
         }
@@ -316,6 +322,7 @@ enum PatchEngine {
             result.headers = headers
         }
         result.rows = out
+        result.sourceRows = sourceRows
         return result
     }
 

@@ -164,7 +164,17 @@ struct ContentView: View {
                              onClose: { showMatchSheet = false })
         }
         // 이전 세션이 있으면 파일 화면에서 이어서 하기를 제안.
-        .onAppear { if resumable == nil { resumable = SessionStore.load() } }
+        .onAppear {
+            if resumable == nil { resumable = SessionStore.load() }
+            // 앱을 켜면서 시스템이 복원한 미리보기 창은 닫는다 (버튼으로 열 때만 보이게).
+            if !preview.openedByUser {
+                DispatchQueue.main.async {
+                    NSApp.windows
+                        .filter { $0.title == PreviewWindowView.windowTitle }
+                        .forEach { $0.close() }
+                }
+            }
+        }
         // 완성본 미리보기 창에서 누른 동작을 여기서 실제로 수행한다.
         .onChange(of: preview.request) { req in handlePreviewRequest(req) }
         // 작업 상태가 바뀔 때마다 (debounce) 자동 저장 — 언제 멈춰도 이어서 가능.
@@ -3734,7 +3744,8 @@ struct ContentView: View {
         // 부분 정제·유틸 모드에서는 ‘합쳐진 새 파일’이 아니라
         // ‘값이 덮어써진 원본’이 결과물이다.
         if isPatching, let base {
-            refreshPatchPreview(base: base, rows: rows, generatedCodes: current.generatedCodes)
+            refreshPatchPreview(base: base, rows: rows, generatedCodes: current.generatedCodes,
+                                origins: current.origins)
             return
         }
 
@@ -3769,9 +3780,16 @@ struct ContentView: View {
         preview.checked = checked
         preview.openCounts = opens
         preview.decisionColumns = relevant
-        preview.rowFiles = current.origins
+        preview.rowFiles = current.origins.isEmpty ? planRowOrigins(rows.count) : current.origins
         preview.fileNames = plans.map(\.fileName)
         sendColumnMarks()
+    }
+
+    /// 올린 파일들의 행 수로 만든 ‘행 → 파일’ 표. 개수가 맞지 않으면 빈 배열.
+    private func planRowOrigins(_ expected: Int) -> [Int] {
+        var out: [Int] = []
+        for (i, p) in plans.enumerated() { out += Array(repeating: i, count: p.rows.count) }
+        return out.count == expected ? out : []
     }
 
     /// 첫 화면에서 보이던 표시(쪼개진 컬럼·짝 후보·지금 보는 컬럼)를 미리보기 창으로 넘긴다.
@@ -3814,7 +3832,7 @@ struct ContentView: View {
     /// 부분 정제 모드의 미리보기: 기존본 그대로에, 이번 결정이 바꾸는 셀만 표시된다.
     /// 비교 기준(baseline)이 손대기 전 기존본이라, 파란 셀이 곧 ‘이번 작업의 변경분’이다.
     private func refreshPatchPreview(base: BaseSheet, rows sourceRows: [ApplicantRow],
-                                     generatedCodes: Set<String>) {
+                                     generatedCodes: Set<String>, origins mergedOrigins: [Int] = []) {
         let p = buildPatch(base: base, rows: sourceRows, generatedCodes: generatedCodes)
 
         var columnHeader = base.columnHeader
@@ -3855,12 +3873,25 @@ struct ContentView: View {
             if open > 0 { opens[r.column] = open }
         }
 
-        // 행마다 어느 파일에서 왔는지 — 큰 미리보기 창에서도 파일 색을 유지한다.
-        var origins = base.rowOrigins.count == base.rows.count ? base.rowOrigins : []
-        if !origins.isEmpty {
-            while origins.count < rows.count { origins.append(-1) }   // 새로 붙인 행
+        // 행마다 어느 파일에서 온 값인지 — 큰 미리보기 창에서도 파일 색을 유지한다.
+        // 사용자가 고른 틀에 이어붙이는 중이면, 그 줄에 값을 넣어 준 파일의 색을 쓴다
+        // (짝을 못 찾아 기존 값 그대로인 줄은 -1 = 틀 색).
+        var origins: [Int] = []
+        if !p.sourceRows.isEmpty, !mergedOrigins.isEmpty {
+            origins = p.sourceRows.map { m in
+                m >= 0 && m < mergedOrigins.count ? mergedOrigins[m] : -1
+            }
+        }
+        if origins.isEmpty {
+            origins = base.rowOrigins.count == base.rows.count ? base.rowOrigins : []
+            // 기준선이 오래돼 출처가 없으면(예전 세션) 올린 파일들의 행 수로 다시 만든다.
+            if origins.isEmpty, !baseIsUserFile { origins = planRowOrigins(base.rows.count) }
+            if !origins.isEmpty {
+                while origins.count < rows.count { origins.append(-1) }   // 새로 붙인 행
+            }
         }
         preview.rowFiles = origins
+        preview.baseName = baseIsUserFile ? base.name : ""
         preview.fileNames = plans.map(\.fileName)
         sendColumnMarks()
 
@@ -6154,6 +6185,9 @@ final class PreviewModel: ObservableObject {
         case merge(UnifiedColumn, UnifiedColumn)    // 두 컬럼을 한 칸으로
     }
 
+    /// 사용자가 고른 틀 이름 (있으면 출처가 없는 줄을 ‘틀 그대로’로 표시).
+    @Published var baseName = ""
+
     /// 사용자가 ‘완성본 미리보기’ 버튼을 눌러 연 창인가.
     /// 앱을 켤 때 시스템이 창을 복원해도 이 값이 false면 스스로 닫는다.
     var openedByUser = false
@@ -6180,7 +6214,7 @@ final class PreviewModel: ObservableObject {
     func fileLabel(row i: Int) -> String {
         guard i < rowFiles.count else { return "" }
         let f = rowFiles[i]
-        guard f >= 0 else { return "새 행" }
+        guard f >= 0 else { return baseName.isEmpty ? "새 행" : "틀 그대로" }
         return f < fileNames.count ? fileNames[f] : "파일 \(f + 1)"
     }
 
@@ -6213,10 +6247,22 @@ final class PreviewModel: ObservableObject {
         rows = []; baselineRows = []; diff = [:]; diffCount = 0
         columns = []; checked = []
         rowFiles = []; fileNames = []
-        splitColumns = []; pairHints = [:]; columnOwners = [:]
+        splitColumns = []; pairHints = [:]; columnOwners = [:]; baseName = ""
         selection = []; request = nil
         openCounts = [:]; decisionColumns = []
         focused = nil
+    }
+}
+
+/// 이 창은 앱을 껐다 켤 때 되살아나지 않게 표시해 둔다 (버튼으로만 열리도록).
+struct NonRestorableWindow: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let v = NSView(frame: .zero)
+        DispatchQueue.main.async { v.window?.isRestorable = false }
+        return v
+    }
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async { nsView.window?.isRestorable = false }
     }
 }
 
@@ -6229,6 +6275,8 @@ struct PreviewWindowView: View {
     @State private var improvedOnly = false
     /// 파일 색·컬럼 상태 색을 켤지 (기본 켬, 설정에 기억).
     @AppStorage("previewShowColors.v2") private var showColors = true
+    /// 창 제목 — 시작할 때 복원된 창을 찾아 닫는 데 쓴다.
+    static let windowTitle = "완성본 미리보기"
     @Environment(\.dismiss) private var dismiss
 
     /// (원본 행 번호, 행) — 검색·필터를 거쳐도 diff/이전값 조회용 인덱스 유지.
@@ -6366,8 +6414,17 @@ struct PreviewWindowView: View {
             }
         }
         .frame(minWidth: 720, minHeight: 420)
+        .background(NonRestorableWindow())
         // 앱을 켤 때 저절로 뜨는(복원되는) 창은 닫는다 — 버튼으로 열었을 때만 남는다.
-        .onAppear { if !model.openedByUser { dismiss() } }
+        // onAppear 시점엔 아직 창이 다 뜨지 않아 dismiss가 먹지 않을 수 있어 다음 차례로 미룬다.
+        .onAppear {
+            guard !model.openedByUser else { return }
+            DispatchQueue.main.async {
+                if model.openedByUser { return }
+                dismiss()
+                NSApp.windows.first { $0.title == PreviewWindowView.windowTitle }?.close()
+            }
+        }
     }
 
     /// 표의 셀 한 칸. 컬럼 상태가 배경으로 내려오고, 개선된 값은 파란 굵은 글씨,
