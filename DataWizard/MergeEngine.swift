@@ -47,6 +47,9 @@ struct MergeEngine {
     /// Applied so e.g. "Seoul" and "서울" land as one value in the merged column.
     var valueMap: [UnifiedColumn: [String: String]] = [:]
 
+    /// Code가 없는 행에 붙일 일련번호의 모양 (첫 값 하나로 정한다).
+    var codePattern: KeyPattern = KeyPattern(example: "6F10001") ?? .auto
+
     /// 전화번호(Clean)에 쓸 목표 포맷 템플릿 — 모든 번호가 이 한 가지 표기로 통일된다.
     var phoneTemplate: String = Normalizer.defaultPhoneTemplate
 
@@ -78,7 +81,7 @@ struct MergeEngine {
         var generatedCodes = Set<String>()
         for i in rows.indices where rows[i][.code].isEmpty {
             serial += 1
-            let code = String(format: "6F1%04d", serial)
+            let code = codePattern.value(serial - 1)
             rows[i][.code] = code
             generatedCodes.insert(code)
         }

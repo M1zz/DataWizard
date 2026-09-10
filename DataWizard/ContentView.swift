@@ -51,6 +51,8 @@ struct ContentView: View {
     @State private var keyColumn: UnifiedColumn?
     /// 사용자가 직접 골랐는가 — 자동 추천이 그 위를 덮어쓰지 않게.
     @State private var keyColumnChosen = false
+    /// 키가 비어 있을 때 만들어 줄 번호의 ‘첫 값’ — 이 한 줄로 규칙이 정해진다.
+    @State private var keyPatternText = "AUTO-0001"
     /// 자동으로 짝지은 컬럼 (되돌리기용 스냅샷과 함께).
     @State private var autoMatched: [(source: UnifiedColumn, target: UnifiedColumn)] = []
     @State private var undoPlans: [FilePlan]?
@@ -1345,6 +1347,7 @@ struct ContentView: View {
                 }
                 Spacer(minLength: 8)
             }
+            if step.id == "key", keyColumn != nil { keyPatternEditor }
             HStack(spacing: 10) {
                 if let title = step.actionTitle, let action = step.action {
                     Button(action: action) { Text(title).fontWeight(.semibold) }
@@ -1593,7 +1596,8 @@ struct ContentView: View {
         seedValueMap(from: reviews)
         if !baseIsUserFile {
             base = BaseSheet.stacked(plans, name: stackedName(plans),
-                                     template: templateColumns, key: keyColumn)
+                                     template: templateColumns, key: keyColumn,
+                                 keyPattern: keyPattern)
         }
 
         var next = before.intersection(Set(finalColumns))
@@ -3318,7 +3322,10 @@ struct ContentView: View {
     @ViewBuilder
     private func body(for review: ColumnReview) -> some View {
         if review.kind == .derived {
-            NoteBody(note: review.note)
+            VStack(alignment: .leading, spacing: 10) {
+                NoteBody(note: review.note)
+                if review.column == .code { keyPatternEditor }
+            }
         } else {
             switch effectiveType(review) {
             case .category:
@@ -3835,7 +3842,8 @@ struct ContentView: View {
         result = nil
         if !baseIsUserFile {
             base = BaseSheet.stacked(built, name: stackedName(built),
-                                     template: templateColumns, key: keyColumn)
+                                     template: templateColumns, key: keyColumn,
+                                 keyPattern: keyPattern)
         }
         finalColumns = (!baseIsUserFile ? base?.columns : nil)
             ?? ColumnReviewBuilder.plainColumns(in: built)
@@ -3857,11 +3865,13 @@ struct ContentView: View {
         refreshMatches()
         // 틀이 있으면, 채울 수 있는 컬럼은 묻지 않고 바로 채운다.
         if !templateColumns.isEmpty { autoMatchTemplateColumns() }
+        if !keyColumnChosen { keyPatternText = "AUTO-0001" }   // 유틸 흐름 기본
         // 키는 자동으로 골라 두고, 합치기 단계에서 확인만 받는다.
         if !keyColumnChosen, plans.count > 1, let auto = autoKeyColumn() {
             keyColumn = auto
             base = BaseSheet.stacked(plans, name: stackedName(plans),
-                                     template: templateColumns, key: auto)
+                                     template: templateColumns, key: auto,
+                                     keyPattern: keyPattern)
             finalColumns = base?.columns ?? finalColumns
         }
         includedColumns = focusColumns
@@ -3923,6 +3933,7 @@ struct ContentView: View {
             return (r.rows, [], r.changes, origins.count == r.rows.count ? origins : [])
         }
         let r = try? MergeEngine(plans: plans, valueMap: valueMap,
+                                 codePattern: keyPattern,
                                  phoneTemplate: phoneTemplate).run()
         return (r?.rows ?? [], r?.generatedCodes ?? [], r?.changes ?? [], r?.origins ?? [])
     }
@@ -4046,7 +4057,8 @@ struct ContentView: View {
             return
         }
         base = BaseSheet.stacked(plans, name: stackedName(plans),
-                                 template: templateColumns, key: keyColumn)
+                                 template: templateColumns, key: keyColumn,
+                                 keyPattern: keyPattern)
         finalColumns = base?.columns ?? ColumnReviewBuilder.plainColumns(in: plans)
         reviews = ColumnReviewBuilder.plainReviews(in: plans)
         seedValueMap(from: reviews)
@@ -4309,6 +4321,35 @@ struct ContentView: View {
         return candidates.first
     }
 
+    /// 자동으로 붙는 일련번호를 사람이 정하는 칸 — 규칙 대신 **첫 값**을 적게 한다.
+    private var keyPatternEditor: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text("첫 번호").font(.body.weight(.semibold))
+                TextField("예: 6F10001", text: $keyPatternText)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 180)
+                Text("→ \(keyPattern.sample)")
+                    .font(.body).foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            Text("여기 적은 값이 첫 번호가 되고, 그다음부터 1씩 올라갑니다. "
+                 + "앞에 붙인 글자와 자릿수도 그대로 따라갑니다 (`A-001` → `A-002`). "
+                 + "이미 원본에 있는 번호는 건너뜁니다.")
+                .font(.body).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(Color.primary.opacity(0.04)))
+        .onChange(of: keyPatternText) { _ in scheduleSave() }
+    }
+
+    /// 첫 값에서 읽어 낸 번호 규칙.
+    private var keyPattern: KeyPattern { KeyPattern(example: keyPatternText) ?? .auto }
+
     /// 키가 바뀌면 결과물(기준선)을 다시 만든다.
     private func applyKeyColumn(_ col: UnifiedColumn?) {
         keyColumn = col
@@ -4456,6 +4497,10 @@ struct ContentView: View {
     private func prepareReview() {
         errorMessage = nil
         isPreparing = true
+        // 아카데미 통합본의 Unique ID 기본값 (사양서 6F1 + 일련번호).
+        if !keyColumnChosen, KeyPattern(example: keyPatternText)?.prefix == "AUTO-" {
+            keyPatternText = "6F10001"
+        }
         let current = inputs
         let previous = plans
         DispatchQueue.global(qos: .userInitiated).async {
@@ -4566,7 +4611,8 @@ struct ContentView: View {
             matchColumn: matchColumn?.rawValue,
             templateName: templateName,
             templateColumns: templateColumns.map { $0.rawValue },
-            keyColumn: keyColumn?.rawValue)
+            keyColumn: keyColumn?.rawValue,
+            keyPattern: keyPatternText)
     }
 
     /// 변경이 잦아도 0.8초 뒤 한 번만 저장 (디바운스).
@@ -4648,6 +4694,7 @@ struct ContentView: View {
         templateColumns = (s.templateColumns ?? []).compactMap(col)
         keyColumn = s.keyColumn.flatMap(col)
         keyColumnChosen = s.keyColumn != nil
+        if let p = s.keyPattern, !p.isEmpty { keyPatternText = p }
         indexBase()
         refreshMatches()
         patch = nil
@@ -4702,6 +4749,7 @@ struct ContentView: View {
         let allPlans = plans
         let map = valueMap
         let template = phoneTemplate
+        let pattern = keyPattern
         DispatchQueue.global(qos: .userInitiated).async {
             do {
                 let r: MergeResult
@@ -4713,6 +4761,7 @@ struct ContentView: View {
                                     changes: applied.changes)
                 } else {
                     r = try MergeEngine(plans: allPlans, valueMap: map,
+                                        codePattern: pattern,
                                         phoneTemplate: template).run()
                 }
                 let p = baseSheet.map {

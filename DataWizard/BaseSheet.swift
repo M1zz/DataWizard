@@ -1,5 +1,56 @@
 import Foundation
 
+/// 자동으로 만들어 주는 일련번호의 모양.
+/// 규칙을 따로 적게 하지 않고 **첫 값 하나**로 정한다 — `6F10001`이라고 적으면
+/// `6F1` + 4자리, 1번부터라는 뜻이고 다음은 `6F10002`가 된다.
+struct KeyPattern: Equatable {
+    var prefix: String
+    var digits: Int
+    var start: Int
+    var suffix: String = ""
+
+    static let auto = KeyPattern(prefix: "AUTO-", digits: 4, start: 1)
+
+    init(prefix: String, digits: Int, start: Int, suffix: String = "") {
+        self.prefix = prefix
+        self.digits = max(1, digits)
+        self.start = start
+        self.suffix = suffix
+    }
+
+    /// 예시 값에서 규칙을 읽어 낸다 (마지막 숫자 덩어리를 번호로 본다).
+    /// `6F10001` → 6F1·4자리·1부터, `A-001` → A-·3자리·1부터, `1001` → 4자리·1001부터.
+    init?(example: String) {
+        let text = example.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+        let chars = Array(text)
+        // 뒤에서부터 숫자 덩어리를 찾는다 (끝에 붙은 글자는 suffix로 둔다).
+        var end = chars.count
+        while end > 0, !chars[end - 1].isNumber { end -= 1 }
+        guard end > 0 else { return nil }
+        var begin = end
+        while begin > 0, chars[begin - 1].isNumber { begin -= 1 }
+        let number = String(chars[begin..<end])
+        guard let value = Int(number) else { return nil }
+        self.prefix = String(chars[0..<begin])
+        self.digits = number.count
+        self.start = value
+        self.suffix = String(chars[end...])
+    }
+
+    /// `offset`번째 값 (0이면 첫 값).
+    func value(_ offset: Int) -> String {
+        let n = start + offset
+        let body = String(n)
+        let padded = body.count >= digits ? body
+            : String(repeating: "0", count: digits - body.count) + body
+        return prefix + padded + suffix
+    }
+
+    /// 사람에게 보여 줄 예시 — `6F10001, 6F10002, 6F10003 …`
+    var sample: String { (0..<3).map { value($0) }.joined(separator: ", ") + " …" }
+}
+
 /// 이미 만들어 둔 통합본 — ‘기존에 만들던 데이터’.
 ///
 /// 헤더 순서와 스키마 밖 컬럼(온테점수·수기 메모 등)까지 원본 그대로 들고 있다가,
@@ -138,7 +189,8 @@ extension BaseSheet {
     /// 키가 비어 있는 행에는 `AUTO-0001` 같은 번호를 만들어 넣는다 (그 행도 한 줄로 남는다).
     static func stacked(_ plans: [FilePlan], name: String,
                         template: [UnifiedColumn] = [],
-                        key: UnifiedColumn? = nil) -> BaseSheet {
+                        key: UnifiedColumn? = nil,
+                        keyPattern: KeyPattern = .auto) -> BaseSheet {
         var headers: [String] = []
         var seenHeader = Set<String>()
         for col in template where seenHeader.insert(col.rawValue).inserted {
@@ -169,8 +221,11 @@ extension BaseSheet {
                 var value = plan.compose(key, from: src)
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 if value.isEmpty {
-                    generatedKeys += 1
-                    value = String(format: "AUTO-%04d", generatedKeys)
+                    // 이미 쓰이고 있는 번호는 건너뛴다 — 원본 값과 부딪히지 않게.
+                    repeat {
+                        value = keyPattern.value(generatedKeys)
+                        generatedKeys += 1
+                    } while indexByKey[value.lowercased()] != nil
                     row[keyHeader] = value
                     rows.append(row)
                     origins.append(i)

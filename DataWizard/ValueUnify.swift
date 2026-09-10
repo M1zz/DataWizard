@@ -363,7 +363,7 @@ enum ColumnReviewBuilder {
                                     note: "만 나이를 19-20 / 21-25 / … / 41+ 구간으로 묶습니다. 생일 미인식은 NA.")
             case .code:
                 return ColumnReview(column: col, kind: .derived,
-                                    note: "일반지원은 원본 Code 유지, Code가 없는 간편지원에는 ‘6F10001’부터 일련번호가 자동 부여됩니다.")
+                                    note: "일반지원은 원본 Code를 그대로 두고, Code가 없는 행에만 일련번호를 만들어 붙입니다. 첫 번호는 아래에서 바꿀 수 있어요.")
             case .phone:
                 let raw = rawValues(.phone, in: plans)
                 let distinct = ValueScanner.distinct(.phone, in: plans)

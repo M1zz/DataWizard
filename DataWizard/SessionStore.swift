@@ -36,6 +36,8 @@ struct SessionSnapshot: Codable {
     var templateColumns: [String]?
     /// 여러 파일을 합칠 때 ‘같은 행’을 가리는 키 컬럼.
     var keyColumn: String?
+    /// 키가 비었을 때 만들어 줄 번호의 첫 값 (예: 6F10001).
+    var keyPattern: String?
 
     struct FileSnapshot: Codable {
         var path: String
