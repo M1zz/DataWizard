@@ -42,6 +42,9 @@ struct SessionSnapshot: Codable {
     var confirmedRows: [String]?
     /// 사용자가 직접 지운 행 (`파일#줄`).
     var deletedRows: [String]?
+    /// 행을 거르는 기준 컬럼과 남길 값들.
+    var filterColumn: String?
+    var filterKeep: [String]?
 
     struct FileSnapshot: Codable {
         var path: String

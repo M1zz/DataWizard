@@ -146,6 +146,10 @@ struct ContentView: View {
     @State private var confirmedRowKeys: Set<String> = []
     /// 사용자가 직접 지운 행 (`파일#줄`). 이것 말고는 어떤 행도 사라지지 않는다.
     @State private var deletedSourceIDs: Set<String> = []
+    /// 행을 걸러 낼 기준 컬럼(예: Process Status)과 ‘남길 값’들. 비어 있으면 안 거른다.
+    @State private var filterColumn: UnifiedColumn?
+    @State private var filterKeep: Set<String> = []
+    @State private var showFilterSheet = false
     /// 미리보기 계산 순번 — 늦게 끝난 옛 계산이 새 결과를 덮지 않게.
     @State private var previewToken = 0
 
@@ -180,6 +184,7 @@ struct ContentView: View {
                                     set: { if !$0 { confirmMerge = nil } })) {
             mergeConfirmSheet
         }
+        .sheet(isPresented: $showFilterSheet) { rowFilterSheet }
         .sheet(item: $filePreview) { plan in
             FilePreviewSheet(plan: plan,
                              tint: fileTint(plans.firstIndex(where: { $0.id == plan.id }) ?? 0),
@@ -900,6 +905,77 @@ struct ContentView: View {
         }
     }
 
+    /// 어떤 값을 남길지 골라 행을 거르는 창 — 지우는 게 아니라 감추는 것.
+    @ViewBuilder
+    private var rowFilterSheet: some View {
+        if let col = filterColumn {
+            let counts = filterValueCounts(col)
+            let keeping = counts.filter { filterKeep.contains($0.value) }
+                .reduce(0) { $0 + $1.count }
+            VStack(alignment: .leading, spacing: 12) {
+                Text("어떤 행을 남길까요?").font(.title2.weight(.bold))
+                Picker("기준 컬럼", selection: Binding(
+                    get: { col },
+                    set: { newCol in
+                        filterColumn = newCol
+                        filterKeep = Set(filterValueCounts(newCol).map(\.value))
+                    })) {
+                    ForEach(filterCandidates) { c in Text(c.rawValue).tag(c) }
+                }
+                .frame(maxWidth: 360)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(counts, id: \.value) { item in
+                            Toggle(isOn: Binding(
+                                get: { filterKeep.contains(item.value) },
+                                set: { on in
+                                    if on { filterKeep.insert(item.value) }
+                                    else { filterKeep.remove(item.value) }
+                                })) {
+                                HStack {
+                                    Text(item.value).font(.body)
+                                    Spacer()
+                                    Text("\(item.count)행")
+                                        .font(.body.monospacedDigit()).foregroundStyle(.secondary)
+                                }
+                            }
+                            .toggleStyle(.checkbox)
+                        }
+                    }
+                }
+                .frame(maxHeight: 260)
+                HStack(spacing: 8) {
+                    Button("모두 남기기") { filterKeep = Set(counts.map(\.value)) }
+                        .controlSize(.small)
+                    Button("모두 빼기") { filterKeep = [] }
+                        .controlSize(.small)
+                    Spacer()
+                    Text("남는 행 \(keeping)행 / 전체 \(counts.reduce(0) { $0 + $1.count })행")
+                        .font(.body.weight(.semibold))
+                }
+                Text("빼는 행은 지우는 게 아니라 결과에서 잠깐 감춰 둡니다. ‘모두 남기기’로 언제든 되돌려요.")
+                    .font(.body).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack {
+                    Button("거르지 않기") {
+                        showFilterSheet = false
+                        applyRowFilter(nil, keep: [])
+                    }
+                    Spacer()
+                    Button("취소") { showFilterSheet = false }
+                    Button("이대로 하기") {
+                        showFilterSheet = false
+                        applyRowFilter(col, keep: filterKeep)
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+            .padding(20)
+            .frame(minWidth: 520)
+        }
+    }
+
     /// 여러 칸을 한 칸으로 합치기 — 어디에·어떤 순서로·무엇을 사이에 넣을지 정한다.
     @ViewBuilder
     private var mergeConfirmSheet: some View {
@@ -1576,6 +1652,33 @@ struct ContentView: View {
             let n = filesHaving($0)
             return n > 0 && n < plans.count && !paired.contains($0)
         }
+        if let col = filterCandidates.first(where: { c in
+            // ‘상태’처럼 생긴 컬럼을 먼저 권한다.
+            let n = c.rawValue.lowercased()
+            return n.contains("status") || n.contains("상태") || n.contains("진행")
+        }) ?? filterCandidates.first {
+            let counts = filterValueCounts(col)
+            let top = counts.prefix(4)
+                .map { "\($0.value) \($0.count)행" }.joined(separator: " · ")
+            let filtered = filteredOutSourceIDs.count
+            out.append(MergeStep(
+                id: "filter",
+                symbol: "line.3.horizontal.decrease.circle", tint: .accentColor,
+                title: filterColumn == nil
+                    ? "행을 걸러 낼까요? — ‘\(col.rawValue)’로 나뉩니다"
+                    : "‘\(filterColumn!.rawValue)’로 거르는 중 — \(filtered)행 빼 둠",
+                detail: top + (counts.count > 4 ? " · 외 \(counts.count - 4)종" : "")
+                    + "\n예를 들어 작성 중인 신청은 빼고 ‘제출 완료’만 남길 수 있어요. "
+                    + "빼도 지우는 게 아니라 잠깐 감춰 두는 것이고, 언제든 되돌립니다.",
+                actionTitle: "고르기…",
+                action: {
+                    if filterColumn == nil {
+                        filterColumn = col
+                        filterKeep = Set(filterValueCounts(col).map(\.value))
+                    }
+                    showFilterSheet = true
+                }))
+        }
         if let sheet = base, !sheet.duplicateRows.isEmpty {
             out.append(MergeStep(
                 id: "dup",
@@ -1722,6 +1825,17 @@ struct ContentView: View {
                 }
                 Text("표시만 해 뒀어요 — 지울지는 직접 정하시면 됩니다.")
                     .font(.body).foregroundStyle(.secondary)
+            }
+            if !filteredOutSourceIDs.isEmpty, let col = filterColumn {
+                HStack(spacing: 6) {
+                    Text("‘\(col.rawValue)’로 빼 둔 행").font(.body).foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.middle)
+                    Spacer(minLength: 8)
+                    Text("\(filteredOutSourceIDs.count)행")
+                        .font(.body.monospacedDigit()).foregroundStyle(.secondary)
+                    Button("되돌리기") { applyRowFilter(nil, keep: []) }
+                        .controlSize(.small)
+                }
             }
             if !deletedSourceIDs.isEmpty {
                 HStack(spacing: 6) {
@@ -2018,7 +2132,7 @@ struct ContentView: View {
             base = BaseSheet.stacked(plans, name: stackedName(plans),
                                      template: templateColumns, key: keyColumn,
                                  keyPattern: keyPattern, identity: identityColumns,
-                                 excluding: deletedSourceIDs)
+                                 excluding: deletedSourceIDs.union(filteredOutSourceIDs))
         }
 
         var next = before.intersection(Set(finalColumns))
@@ -4265,7 +4379,7 @@ struct ContentView: View {
             base = BaseSheet.stacked(built, name: stackedName(built),
                                      template: templateColumns, key: keyColumn,
                                  keyPattern: keyPattern, identity: identityColumns,
-                                 excluding: deletedSourceIDs)
+                                 excluding: deletedSourceIDs.union(filteredOutSourceIDs))
         }
         finalColumns = (!baseIsUserFile ? base?.columns : nil)
             ?? ColumnReviewBuilder.plainColumns(in: built)
@@ -4294,7 +4408,7 @@ struct ContentView: View {
             base = BaseSheet.stacked(plans, name: stackedName(plans),
                                      template: templateColumns, key: auto,
                                      keyPattern: keyPattern, identity: identityColumns,
-                                 excluding: deletedSourceIDs)
+                                 excluding: deletedSourceIDs.union(filteredOutSourceIDs))
             finalColumns = base?.columns ?? finalColumns
         }
         includedColumns = focusColumns
@@ -4482,7 +4596,7 @@ struct ContentView: View {
         base = BaseSheet.stacked(plans, name: stackedName(plans),
                                  template: templateColumns, key: keyColumn,
                                  keyPattern: keyPattern, identity: identityColumns,
-                                 excluding: deletedSourceIDs)
+                                 excluding: deletedSourceIDs.union(filteredOutSourceIDs))
         finalColumns = base?.columns ?? ColumnReviewBuilder.plainColumns(in: plans)
         reviews = ColumnReviewBuilder.plainReviews(in: plans)
         seedValueMap(from: reviews)
@@ -4798,6 +4912,48 @@ struct ContentView: View {
     }
 
 
+    /// 행을 걸러 낼 만한 컬럼 — 값이 몇 종류뿐인 ‘상태’ 같은 컬럼.
+    private var filterCandidates: [UnifiedColumn] {
+        finalColumns.filter { col in
+            guard plans.contains(where: { $0.isMapped(col) }) else { return false }
+            let counts = filterValueCounts(col)
+            return counts.count >= 2 && counts.count <= 12
+        }
+    }
+
+    /// 그 컬럼의 값별 행 수 (빈 값은 `(빈 칸)`으로).
+    private func filterValueCounts(_ col: UnifiedColumn) -> [(value: String, count: Int)] {
+        var counts: [String: Int] = [:]
+        for plan in plans where plan.isMapped(col) {
+            for row in plan.rows {
+                let v = plan.compose(col, from: row).trimmingCharacters(in: .whitespacesAndNewlines)
+                counts[v.isEmpty ? "(빈 칸)" : v, default: 0] += 1
+            }
+        }
+        return counts.sorted { $0.value > $1.value }.map { (value: $0.key, count: $0.value) }
+    }
+
+    /// 지금 필터로 빠지는 행들 (`파일#줄`). 지운 게 아니라 ‘잠깐 빼 둔’ 것.
+    private var filteredOutSourceIDs: Set<String> {
+        guard let col = filterColumn, !filterKeep.isEmpty else { return [] }
+        var out = Set<String>()
+        for (i, plan) in plans.enumerated() {
+            guard plan.isMapped(col) else { continue }
+            for (r, row) in plan.rows.enumerated() {
+                let v = plan.compose(col, from: row).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !filterKeep.contains(v.isEmpty ? "(빈 칸)" : v) { out.insert("\(i)#\(r)") }
+            }
+        }
+        return out
+    }
+
+    private func applyRowFilter(_ col: UnifiedColumn?, keep: Set<String>) {
+        filterColumn = col
+        filterKeep = keep
+        withBusy("행을 거르는 중…") { rebuildWorkColumns() }
+        scheduleSave()
+    }
+
     /// 중복으로 보이는 행들을 **사용자가 눌렀을 때만** 지운다. 되살리기도 한 번에.
     private func deleteDuplicateRows() {
         guard let sheet = base, !sheet.duplicateRows.isEmpty else { return }
@@ -4982,7 +5138,9 @@ struct ContentView: View {
             keyColumn: keyColumn?.rawValue,
             keyPattern: keyPatternText,
             confirmedRows: Array(confirmedRowKeys),
-            deletedRows: Array(deletedSourceIDs))
+            deletedRows: Array(deletedSourceIDs),
+            filterColumn: filterColumn?.rawValue,
+            filterKeep: Array(filterKeep))
     }
 
     /// 변경이 잦아도 0.8초 뒤 한 번만 저장 (디바운스).
@@ -5079,6 +5237,8 @@ struct ContentView: View {
         if let p = s.keyPattern, !p.isEmpty { keyPatternText = p }
         confirmedRowKeys = Set(s.confirmedRows ?? [])
         deletedSourceIDs = Set(s.deletedRows ?? [])
+        filterColumn = s.filterColumn.flatMap(col)
+        filterKeep = Set(s.filterKeep ?? [])
         indexBase()
         refreshMatches()
         patch = nil
