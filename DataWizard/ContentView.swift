@@ -4320,9 +4320,9 @@ struct ContentView: View {
     /// 올린 파일을 그대로 합치는 중이면 행 순서로, 따로 불러온 통합본에
     /// 이어붙이는 중이면 Code→전화→이메일 키로 짝짓는다.
     private var rowMatch: RowMatch {
-        // 키로 포갠 결과물은 행 수가 원본과 다르다 — 그 키로 짝지어야 값이 제자리에 간다.
-        if let keyColumn, !baseIsUserFile { return .column(keyColumn) }
-        if isUtility && !baseIsUserFile { return .position }
+        // 올린 파일을 그대로 쌓은 기준선은 행이 1:1로 대응한다 — 위치로 짝짓는다.
+        // (키로 짝지으면 같은 키를 가진 둘째 행이 짝을 못 찾아 ‘새 행’으로 붙어 버린다.)
+        if !baseIsUserFile { return .position }
         if let matchColumn { return .column(matchColumn) }
         return .key
     }
@@ -4888,8 +4888,10 @@ struct ContentView: View {
         // (짝을 못 찾아 기존 값 그대로인 줄은 -1 = 틀 색).
         var origins: [Int] = []
         if !p.sourceRows.isEmpty, !mergedOrigins.isEmpty {
-            origins = p.sourceRows.map { m in
-                m >= 0 && m < mergedOrigins.count ? mergedOrigins[m] : -1
+            origins = p.sourceRows.enumerated().map { i, m in
+                if m >= 0, m < mergedOrigins.count { return mergedOrigins[m] }
+                // 새 데이터와 짝이 없더라도, 기준선이 아는 출처가 있으면 그걸 쓴다.
+                return i < base.rowOrigins.count ? base.rowOrigins[i] : -1
             }
         }
         if origins.isEmpty {
