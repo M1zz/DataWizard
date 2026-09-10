@@ -140,7 +140,11 @@ struct ContentView: View {
         .background(Color(nsColor: .windowBackgroundColor))
         .sheet(item: $detailColumn) { col in detailSheet(col) }
         .sheet(item: $configColumn) { col in
-            ColumnSourceSheet(column: col, plans: $plans, onClose: { configColumn = nil })
+            ColumnSourceSheet(column: col, plans: $plans, onClose: {
+                configColumn = nil
+                // 어느 칸을 쓸지 바뀌었으니 컬럼·값·미리보기를 다시 만든다.
+                if stage == .work { rebuildWorkColumns() }
+            })
         }
         .sheet(item: $exampleColumn) { col in
             ExampleRuleSheet(column: col,
@@ -930,10 +934,12 @@ struct ContentView: View {
         let here = (col == currentProposalColumn)
         let owner = columnOwnerTint(col)
         let owners = columnOwnerIndices(col)
+        let isEmpty = emptyColumns.contains(col)
         let caption: String? = here ? "지금 볼 컬럼"
-            : (split ? splitCaption(col)
-               : (owners.isEmpty ? nil : (plans.count > 1 ? "모든 파일에 있음" : nil)))
-        let captionTint: Color = here ? .accentColor : (split ? .orange : .secondary)
+            : (isEmpty ? "비어 있음 — 채울 칸을 골라 주세요"
+               : (split ? splitCaption(col)
+                  : (owners.isEmpty ? nil : (plans.count > 1 ? "모든 파일에 있음" : nil))))
+        let captionTint: Color = here ? .accentColor : (split || isEmpty ? .orange : .secondary)
         let background: Color = here ? Color.accentColor.opacity(0.16)
             : (owner?.opacity(0.16) ?? (split ? Color.orange.opacity(0.10) : Color.clear))
         return VStack(alignment: .leading, spacing: 1) {
@@ -1076,6 +1082,22 @@ struct ContentView: View {
         var action: (() -> Void)? = nil
     }
 
+    /// 지금 결과에서 값이 하나도 없는 컬럼 — 틀에만 있거나, 파일에 값이 안 들어온 컬럼.
+    private var emptyColumns: [UnifiedColumn] {
+        finalColumns.filter { col in
+            guard filesHaving(col) > 0 else { return true }   // 어떤 파일도 이 컬럼을 안 채움
+            return (reviewFor(col)?.total ?? 0) == 0          // 채우긴 하는데 값이 다 비었음
+        }
+    }
+
+    /// 빈 컬럼에 짝이 될 만한 후보가 있으면 (자동으로 잇기엔 확신이 모자란 것들).
+    private func emptyColumnHint(_ col: UnifiedColumn) -> (source: UnifiedColumn, percent: Int)? {
+        for s in matchSuggestions {
+            if let b = s.best, b.column == col { return (s.source, b.percent) }
+        }
+        return nil
+    }
+
     /// 지금 남아 있는 합치기 할 일들 — 확인한 것은 빠진다.
     private var mergeSteps: [MergeStep] {
         guard plans.count > 1 || baseIsUserFile else { return [] }
@@ -1117,6 +1139,26 @@ struct ContentView: View {
         let partial = finalColumns.filter {
             let n = filesHaving($0)
             return n > 0 && n < plans.count && !paired.contains($0)
+        }
+        let empties = emptyColumns
+        if let first = empties.first {
+            let hint = empties.compactMap { c -> String? in
+                emptyColumnHint(c).map { "‘\(c.rawValue)’는 파일의 ‘\($0.source.rawValue)’일 수 있어요 (\($0.percent)%)" }
+            }.first
+            var detail = empties.prefix(6).map(\.rawValue).joined(separator: " · ")
+                + (empties.count > 6 ? " 외 \(empties.count - 6)개" : "")
+            detail += "\n올린 파일에서 이 컬럼에 넣을 값을 못 찾았어요. 채우는 방법은 셋입니다:"
+            if let hint { detail += "\n① " + hint + " → ‘짝지어 주기…’로 이어 붙이기" }
+            else { detail += "\n① 파일의 어느 칸이 이 컬럼인지 직접 골라 주기 (아래 버튼)" }
+            detail += "\n② 그 값이 들어 있는 파일을 더 올리기"
+            detail += "\n③ 원래 비워 두는 칸이면 그냥 두기 — 결과에도 빈칸으로 남습니다"
+            out.append(MergeStep(
+                id: "empty",
+                symbol: "rectangle.dashed", tint: .orange,
+                title: "아직 비어 있는 컬럼 \(empties.count)개",
+                detail: detail,
+                actionTitle: "‘\(first.rawValue)’ 채울 칸 고르기…",
+                action: { configColumn = first }))
         }
         if !partial.isEmpty {
             out.append(MergeStep(
@@ -2269,6 +2311,10 @@ struct ContentView: View {
         let gap = templateGap(r)
         let head = "\(r.total)행 · \(r.distinctCount)종"
         if open > 0 { return ("\(head) · 미정리 \(open)종", true, "손볼 거리 있음") }
+        if r.total == 0 {
+            return ("아직 비어 있음 — 채울 칸을 골라 주거나 그대로 두면 빈칸으로 남습니다",
+                    true, "비어 있음")
+        }
         if gap.isNew {
             return ("\(head) · 틀에 없는 컬럼 — 결과 파일 맨 뒤에 새로 생깁니다", true, "틀에 없는 컬럼")
         }
@@ -4067,6 +4113,7 @@ struct ContentView: View {
         preview.splitColumns = split
         preview.pairHints = hints
         preview.columnOwners = owners
+        preview.emptyColumns = Set(emptyColumns)
         // 컬럼을 고르는 중이면 지금 제안하는 컬럼을 강조해 둔다.
         if stage == .work, openColumn == nil { preview.focused = currentProposalColumn }
     }
@@ -6442,6 +6489,8 @@ final class PreviewModel: ObservableObject {
     @Published var pairHints: [UnifiedColumn: String] = [:]
     // 컬럼마다 어느 파일에 들어 있는지 (파일 순번) — 열 배경색·점 표시에 쓴다.
     @Published var columnOwners: [UnifiedColumn: [Int]] = [:]
+    /// 값이 하나도 없는 컬럼 — 머리글에 ‘비어 있음’으로 알려 준다.
+    @Published var emptyColumns: Set<UnifiedColumn> = []
     // 미리보기 창에서 고른 컬럼과, 메인 창에 보내는 요청.
     @Published var selection: Set<UnifiedColumn> = []
     @Published var request: PreviewRequest?
@@ -6543,6 +6592,7 @@ final class PreviewModel: ObservableObject {
         columns = []; checked = []
         rowFiles = []; fileNames = []
         splitColumns = []; pairHints = [:]; columnOwners = [:]; baseName = ""; newRows = []
+        emptyColumns = []
         selection = []; request = nil
         openCounts = [:]; decisionColumns = []
         focused = nil
@@ -6828,6 +6878,11 @@ struct PreviewWindowView: View {
             if isFocused {
                 Text("지금 볼 컬럼")
                     .font(.body).foregroundStyle(Color.accentColor)
+                    .padding(.leading, 20)
+            } else if model.emptyColumns.contains(c) {
+                Text("비어 있음 — 채울 칸을 골라 주세요")
+                    .font(.body).foregroundStyle(.orange)
+                    .lineLimit(1).truncationMode(.tail)
                     .padding(.leading, 20)
             } else if let hint = model.pairHints[c] {
                 HStack(spacing: 4) {
