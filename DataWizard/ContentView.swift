@@ -142,6 +142,10 @@ struct ContentView: View {
     @State private var saveDebouncer = SaveDebouncer()
     /// 마지막으로 자동 저장한 시각 — 저장되고 있다는 걸 눈으로 확인시켜 준다.
     @State private var lastSavedAt: Date?
+    /// 사람이 ‘확정’으로 표시한 행들 (키 값 기준이라 행 순서가 바뀌어도 유지).
+    @State private var confirmedRowKeys: Set<String> = []
+    /// 사용자가 직접 지운 행 (`파일#줄`). 이것 말고는 어떤 행도 사라지지 않는다.
+    @State private var deletedSourceIDs: Set<String> = []
 
     var body: some View {
         stagedContent
@@ -1487,6 +1491,22 @@ struct ContentView: View {
             let n = filesHaving($0)
             return n > 0 && n < plans.count && !paired.contains($0)
         }
+        if let sheet = base, !sheet.duplicateRows.isEmpty {
+            out.append(MergeStep(
+                id: "dup",
+                symbol: "person.2.fill", tint: .orange,
+                title: "중복으로 보이는 행 \(sheet.duplicateRows.count)개",
+                detail: "같은 이메일·전화·키가 앞줄에 이미 나왔어요 (\(sheet.duplicateGroups)명). "
+                    + "**행은 하나도 지우지 않았습니다** — 표시만 해 뒀어요.\n"
+                    + "미리보기에서 ‘중복만 보기’로 확인한 뒤, 지울지 직접 정하세요.",
+                actionTitle: "중복 행 \(sheet.duplicateRows.count)개 지우기",
+                action: { withBusy("중복 행을 지우는 중…") { deleteDuplicateRows() } },
+                menuTitle: "중복 보기",
+                menuOptions: [("미리보기에서 중복만 보기", {
+                    preview.showDuplicatesOnly = true
+                    openPreviewWindow()
+                })]))
+        }
         let empties = emptyColumns
         if let first = empties.first {
             let hint = empties.compactMap { c -> String? in
@@ -1543,6 +1563,7 @@ struct ContentView: View {
                             .font(.body).monospacedDigit().foregroundStyle(.secondary)
                     }
                 }
+                rowCountTable
                 if let step = steps.first {
                     mergeStepCard(step, remaining: steps.count)
                 } else {
@@ -1563,6 +1584,85 @@ struct ContentView: View {
             .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(steps.isEmpty ? Color.green.opacity(0.07) : Color.primary.opacity(0.04)))
         }
+    }
+
+    /// 행 수 대조표 — 올린 파일마다 몇 행이고, 결과물이 몇 행인지 한눈에.
+    /// 숫자가 맞는지 눈으로 확인할 수 있어야 결과를 믿을 수 있다.
+    @ViewBuilder
+    private var rowCountTable: some View {
+        let total = plans.reduce(0) { $0 + $1.rows.count }
+        let result = base?.rows.count ?? total
+        let merged = base?.mergedByKey ?? 0
+        let made = base?.generatedKeys ?? 0
+        VStack(alignment: .leading, spacing: 4) {
+            Text("행 수 맞춰 보기").font(.body.weight(.semibold))
+            ForEach(Array(plans.enumerated()), id: \.element.id) { idx, plan in
+                HStack(spacing: 6) {
+                    RoundedRectangle(cornerRadius: 2).fill(fileTint(idx))
+                        .frame(width: 8, height: 8)
+                    Text(plan.fileName)
+                        .font(.body).foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.middle)
+                    Spacer(minLength: 8)
+                    Text("\(plan.rows.count)행")
+                        .font(.body.monospacedDigit()).foregroundStyle(.secondary)
+                }
+            }
+            Divider()
+            HStack(spacing: 6) {
+                Text("올린 파일 합계").font(.body)
+                Spacer(minLength: 8)
+                Text("\(total)행").font(.body.monospacedDigit())
+            }
+            HStack(spacing: 6) {
+                Text("결과물").font(.body.weight(.semibold))
+                Spacer(minLength: 8)
+                Text("\(result)행")
+                    .font(.body.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(result == total ? .primary : Color.accentColor)
+            }
+            if result == total {
+                Label("행 수가 딱 맞습니다 — 빠진 행이 없어요.", systemImage: "checkmark.circle.fill")
+                    .font(.body).foregroundStyle(.green)
+            } else {
+                Text(rowCountNote(total: total, result: result, merged: merged, made: made))
+                    .font(.body).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let dup = base?.duplicateRows.count, dup > 0 {
+                HStack(spacing: 6) {
+                    Text("중복으로 보이는 행").font(.body).foregroundStyle(.orange)
+                    Spacer(minLength: 8)
+                    Text("\(dup)행").font(.body.monospacedDigit()).foregroundStyle(.orange)
+                }
+                Text("표시만 해 뒀어요 — 지울지는 직접 정하시면 됩니다.")
+                    .font(.body).foregroundStyle(.secondary)
+            }
+            if !deletedSourceIDs.isEmpty {
+                HStack(spacing: 6) {
+                    Text("내가 지운 행").font(.body).foregroundStyle(.secondary)
+                    Spacer(minLength: 8)
+                    Text("\(deletedSourceIDs.count)행")
+                        .font(.body.monospacedDigit()).foregroundStyle(.secondary)
+                    Button("되살리기") { withBusy("되살리는 중…") { restoreDeletedRows() } }
+                        .controlSize(.small)
+                }
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(Color(nsColor: .controlBackgroundColor)))
+    }
+
+    /// 행 수가 왜 달라졌는지 한 문장으로.
+    private func rowCountNote(total: Int, result: Int, merged: Int, made: Int) -> String {
+        var parts: [String] = []
+        if !deletedSourceIDs.isEmpty { parts.append("내가 지운 행 \(deletedSourceIDs.count)개") }
+        if result > total { parts.append("기준 파일에 없던 \(result - total)행이 새로 붙었어요") }
+        if made > 0 { parts.append("키가 없던 \(made)행에는 번호를 만들어 줬어요") }
+        if parts.isEmpty { return "행 수 그대로 — 빠지거나 늘어난 행이 없습니다." }
+        return parts.joined(separator: " · ")
     }
 
     /// 합치기 할 일 한 장 — 무엇을, 왜, 그리고 어떻게 넘어가는지.
@@ -1832,7 +1932,8 @@ struct ContentView: View {
         if !baseIsUserFile {
             base = BaseSheet.stacked(plans, name: stackedName(plans),
                                      template: templateColumns, key: keyColumn,
-                                 keyPattern: keyPattern, identity: identityColumns)
+                                 keyPattern: keyPattern, identity: identityColumns,
+                                 excluding: deletedSourceIDs)
         }
 
         var next = before.intersection(Set(finalColumns))
@@ -4078,7 +4179,8 @@ struct ContentView: View {
         if !baseIsUserFile {
             base = BaseSheet.stacked(built, name: stackedName(built),
                                      template: templateColumns, key: keyColumn,
-                                 keyPattern: keyPattern, identity: identityColumns)
+                                 keyPattern: keyPattern, identity: identityColumns,
+                                 excluding: deletedSourceIDs)
         }
         finalColumns = (!baseIsUserFile ? base?.columns : nil)
             ?? ColumnReviewBuilder.plainColumns(in: built)
@@ -4106,7 +4208,8 @@ struct ContentView: View {
             keyColumn = auto
             base = BaseSheet.stacked(plans, name: stackedName(plans),
                                      template: templateColumns, key: auto,
-                                     keyPattern: keyPattern, identity: identityColumns)
+                                     keyPattern: keyPattern, identity: identityColumns,
+                                 excluding: deletedSourceIDs)
             finalColumns = base?.columns ?? finalColumns
         }
         includedColumns = focusColumns
@@ -4293,7 +4396,8 @@ struct ContentView: View {
         }
         base = BaseSheet.stacked(plans, name: stackedName(plans),
                                  template: templateColumns, key: keyColumn,
-                                 keyPattern: keyPattern, identity: identityColumns)
+                                 keyPattern: keyPattern, identity: identityColumns,
+                                 excluding: deletedSourceIDs)
         finalColumns = base?.columns ?? ColumnReviewBuilder.plainColumns(in: plans)
         reviews = ColumnReviewBuilder.plainReviews(in: plans)
         seedValueMap(from: reviews)
@@ -4435,6 +4539,10 @@ struct ContentView: View {
             withBusy("두 컬럼을 합치는 중…") { mergeTwoColumns(a, b) }
         case .edit(let col, let before, let after):
             withBusy("값을 바꾸는 중…") { editValue(col, from: before, to: after) }
+        case .confirmRow(let key, let on):
+            if on { confirmedRowKeys.insert(key) } else { confirmedRowKeys.remove(key) }
+            preview.confirmedRows = confirmedRowKeys
+            scheduleSave()
         }
     }
 
@@ -4523,6 +4631,7 @@ struct ContentView: View {
         preview.checked = checked
         preview.openCounts = opens
         preview.decisionColumns = relevant
+        sendRowKeys(rows)
         preview.rowFiles = current.origins.isEmpty ? planRowOrigins(rows.count) : current.origins
         preview.fileNames = plans.map(\.fileName)
         sendColumnMarks()
@@ -4617,6 +4726,38 @@ struct ContentView: View {
         var out: [Int] = []
         for (i, p) in plans.enumerated() { out += Array(repeating: i, count: p.rows.count) }
         return out.count == expected ? out : []
+    }
+
+    /// 중복으로 보이는 행들을 **사용자가 눌렀을 때만** 지운다. 되살리기도 한 번에.
+    private func deleteDuplicateRows() {
+        guard let sheet = base, !sheet.duplicateRows.isEmpty else { return }
+        let ids = sheet.duplicateRows.compactMap { i -> String? in
+            i < sheet.rowSourceIDs.count ? sheet.rowSourceIDs[i] : nil
+        }
+        deletedSourceIDs.formUnion(ids)
+        rebuildWorkColumns()
+        scheduleSave()
+    }
+
+    private func restoreDeletedRows() {
+        guard !deletedSourceIDs.isEmpty else { return }
+        deletedSourceIDs = []
+        rebuildWorkColumns()
+        scheduleSave()
+    }
+
+    /// 행 하나의 이름표 — 키 값이 있으면 그것, 없으면 Code·이메일, 그것도 없으면 행 번호.
+    private func rowLabel(_ row: ApplicantRow, at i: Int) -> String {
+        for col in [keyColumn, .code, .email].compactMap({ $0 }) {
+            let v = row[col].trimmingCharacters(in: .whitespacesAndNewlines)
+            if !v.isEmpty { return col.rawValue + "\u{1}" + v.lowercased() }
+        }
+        return "행 \(i + 1)"
+    }
+
+    private func sendRowKeys(_ rows: [ApplicantRow]) {
+        preview.rowKeys = rows.enumerated().map { rowLabel($1, at: $0) }
+        preview.confirmedRows = confirmedRowKeys
     }
 
     /// 첫 화면에서 보이던 표시(쪼개진 컬럼·짝 후보·지금 보는 컬럼)를 미리보기 창으로 넘긴다.
@@ -4721,6 +4862,8 @@ struct ContentView: View {
         preview.rowFiles = origins
         preview.baseName = baseIsUserFile ? base.name : ""
         preview.newRows = p.newRowIndices
+        preview.duplicateRows = base.duplicateRows
+        sendRowKeys(rows)
         preview.fileNames = plans.map(\.fileName)
         sendColumnMarks()
 
@@ -4865,7 +5008,9 @@ struct ContentView: View {
             templateName: templateName,
             templateColumns: templateColumns.map { $0.rawValue },
             keyColumn: keyColumn?.rawValue,
-            keyPattern: keyPatternText)
+            keyPattern: keyPatternText,
+            confirmedRows: Array(confirmedRowKeys),
+            deletedRows: Array(deletedSourceIDs))
     }
 
     /// 변경이 잦아도 0.8초 뒤 한 번만 저장 (디바운스).
@@ -4960,6 +5105,8 @@ struct ContentView: View {
         keyColumn = s.keyColumn.flatMap(col)
         keyColumnChosen = s.keyColumn != nil
         if let p = s.keyPattern, !p.isEmpty { keyPatternText = p }
+        confirmedRowKeys = Set(s.confirmedRows ?? [])
+        deletedSourceIDs = Set(s.deletedRows ?? [])
         indexBase()
         refreshMatches()
         patch = nil
@@ -7042,12 +7189,24 @@ final class PreviewModel: ObservableObject {
         case clean([UnifiedColumn])                 // 고른 컬럼 정리하러 가기
         case merge(UnifiedColumn, UnifiedColumn)    // 두 컬럼을 한 칸으로
         case edit(UnifiedColumn, String, String)    // 컬럼 · 이전 값 · 새 값
+        case confirmRow(String, Bool)               // 행 이름표 · 확정 여부
     }
 
     /// 사용자가 고른 틀 이름 (있으면 그 파일에서 온 행임을 이름으로 보여 준다).
     @Published var baseName = ""
     /// 이번에 새로 붙인 행 (틀에 없던 사람).
     @Published var newRows: Set<Int> = []
+    /// 행마다의 이름표 (키 값 등) — 행 순서가 바뀌어도 ‘확정’ 표시가 따라가게.
+    @Published var rowKeys: [String] = []
+    /// 사람이 ‘확정’으로 표시한 행들.
+    @Published var confirmedRows: Set<String> = []
+    /// 중복으로 보이는 행 (지운 게 아니라 표시만).
+    @Published var duplicateRows: Set<Int> = []
+    /// 창을 열 때 중복만 보여 줄지.
+    @Published var showDuplicatesOnly = false
+
+    func rowKey(_ i: Int) -> String { i < rowKeys.count ? rowKeys[i] : "행 \(i + 1)" }
+    func isConfirmed(_ i: Int) -> Bool { confirmedRows.contains(rowKey(i)) }
 
     /// 사용자가 ‘완성본 미리보기’ 버튼을 눌러 연 창인가.
     /// 앱을 켤 때 시스템이 창을 복원해도 이 값이 false면 스스로 닫는다.
@@ -7135,7 +7294,7 @@ final class PreviewModel: ObservableObject {
         columns = []; checked = []
         rowFiles = []; fileNames = []
         splitColumns = []; pairHints = [:]; columnOwners = [:]; baseName = ""; newRows = []
-        emptyColumns = []
+        emptyColumns = []; rowKeys = []; duplicateRows = []; showDuplicatesOnly = false
         selection = []; request = nil
         openCounts = [:]; decisionColumns = []
         focused = nil
@@ -7308,6 +7467,7 @@ struct PreviewWindowView: View {
     @ObservedObject var model = PreviewModel.shared
     @State private var query = ""
     @State private var improvedOnly = false
+    @State private var unconfirmedOnly = false
     /// 값을 고치는 중인 셀 (컬럼 · 지금 값).
     struct EditTarget: Identifiable {
         let column: UnifiedColumn
@@ -7336,6 +7496,12 @@ struct PreviewWindowView: View {
         var rows = Array(model.rows.enumerated()).map { ($0.offset, $0.element) }
         if improvedOnly {
             rows = rows.filter { !(model.diff[$0.0]?.isEmpty ?? true) }
+        }
+        if unconfirmedOnly {
+            rows = rows.filter { !model.isConfirmed($0.0) }
+        }
+        if model.showDuplicatesOnly {
+            rows = rows.filter { model.duplicateRows.contains($0.0) }
         }
         if !query.isEmpty {
             rows = rows.filter { _, row in
@@ -7383,6 +7549,12 @@ struct PreviewWindowView: View {
                 .help("아직 결정하지 못한 값이 남은 컬럼: "
                       + model.needsWorkColumns.map(\.rawValue).joined(separator: ", "))
         }
+        if !model.confirmedRows.isEmpty {
+            Label("확정 \(model.confirmedRows.count) / \(model.rows.count)행",
+                  systemImage: "checkmark.seal.fill")
+                .font(.body.weight(.medium)).foregroundStyle(.green)
+                .help("행 왼쪽의 동그라미를 눌러 ‘다 봤다’고 표시한 행 수입니다.")
+        }
         if model.diffCount > 0 {
             Label("개선된 셀 \(model.diffCount)개", systemImage: "sparkles")
                 .font(.body.weight(.medium))
@@ -7415,6 +7587,19 @@ struct PreviewWindowView: View {
             .toggleStyle(.checkbox)
             .fixedSize()
             .help("정리로 값이 바뀐 행만 봅니다.")
+        Toggle(isOn: $unconfirmedOnly) { Text("확정 안 한 행만") }
+            .toggleStyle(.checkbox)
+            .fixedSize()
+            .help("아직 확정 표시를 안 한 행만 봅니다.")
+        if !model.duplicateRows.isEmpty {
+            Toggle(isOn: Binding(get: { model.showDuplicatesOnly },
+                                 set: { model.showDuplicatesOnly = $0 })) {
+                Text("중복만 (\(model.duplicateRows.count))")
+            }
+            .toggleStyle(.checkbox)
+            .fixedSize()
+            .help("앞줄에 같은 사람이 이미 있는 행만 봅니다. 지울지는 직접 정하세요.")
+        }
         Button { copyTable() } label: {
             Label("표 복사", systemImage: "doc.on.doc")
         }
@@ -7448,14 +7633,15 @@ struct PreviewWindowView: View {
                                         bodyCell(c, row: row, at: i)
                                     }
                                 }
+                                .background(model.isConfirmed(i) ? Color.green.opacity(0.10) : .clear)
                                 .background(showColors ? (model.fileTint(row: i)?.opacity(0.14) ?? .clear) : .clear)
                                 Divider()
                             }
                         } header: {
                             HStack(spacing: 0) {
-                                Text(model.rowFiles.isEmpty ? "행" : "행 · 출처")
+                                Text(model.rowFiles.isEmpty ? "확정 · 행" : "확정 · 행 · 출처")
                                     .font(.body.weight(.semibold)).foregroundStyle(.secondary)
-                                    .frame(width: model.rowFiles.isEmpty ? 56 : 190, alignment: .leading)
+                                    .frame(width: model.rowFiles.isEmpty ? 82 : 215, alignment: .leading)
                                     .padding(.horizontal, 8).padding(.vertical, 6)
                                 ForEach(Array(model.columns.enumerated()), id: \.element) { idx, c in
                                     headerCell(c, number: idx + 1)
@@ -7585,7 +7771,17 @@ struct PreviewWindowView: View {
     private func rowHeadCell(_ i: Int) -> some View {
         let tint = showColors ? model.fileTint(row: i) : nil
         let hasFiles = !model.rowFiles.isEmpty
+        let done = model.isConfirmed(i)
         return HStack(spacing: 5) {
+            // 이 행은 다 봤다는 표시 — 어디까지 봤는지 눈으로 남긴다.
+            Button {
+                model.request = .confirmRow(model.rowKey(i), !done)
+            } label: {
+                Image(systemName: done ? "checkmark.seal.fill" : "circle")
+                    .foregroundStyle(done ? Color.green : Color.secondary.opacity(0.5))
+            }
+            .buttonStyle(.plain)
+            .help(done ? "확정 해제" : "이 행 확정")
             Text("\(i + 1)")
                 .font(.body.monospacedDigit())
                 .foregroundStyle(.secondary)
@@ -7594,7 +7790,14 @@ struct PreviewWindowView: View {
                 RoundedRectangle(cornerRadius: 2)
                     .fill(tint ?? Color.secondary.opacity(0.35))
                     .frame(width: 3, height: 14)
-                if let badge = model.rowBadge(row: i) {
+                if model.duplicateRows.contains(i) {
+                Text("중복")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.orange)
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .background(Capsule().fill(Color.orange.opacity(0.16)))
+            }
+            if let badge = model.rowBadge(row: i) {
                     Text(badge)
                         .font(.body.weight(.semibold))
                         .foregroundStyle(.secondary)
@@ -7607,7 +7810,7 @@ struct PreviewWindowView: View {
                     .lineLimit(1).truncationMode(.middle)
             }
         }
-        .frame(width: hasFiles ? 190 : 56, alignment: .leading)
+        .frame(width: hasFiles ? 215 : 82, alignment: .leading)
         .padding(.horizontal, 8).padding(.vertical, 4)
         .background((tint ?? Color.secondary).opacity(tint == nil ? 0.05 : 0.12))
         .help(hasFiles ? model.rowOriginHelp(row: i) : "\(i + 1)행")
@@ -7753,22 +7956,24 @@ struct PreviewWindowView: View {
 
     /// 컬럼 폭 조절 손잡이 — 머리글 오른쪽 끝 4px.
     private func widthHandle(_ c: UnifiedColumn) -> some View {
-        Rectangle()
-            .fill(Color.primary.opacity(widthDrag?.column == c.rawValue ? 0.25 : 0.08))
-            .frame(width: 4)
-            .contentShape(Rectangle().inset(by: -4))
+        let active = widthDrag?.column == c.rawValue
+        return Rectangle()
+            .fill(active ? Color.accentColor : Color.primary.opacity(0.10))
+            .frame(width: active ? 3 : 2)
+            .padding(.vertical, 2)
+            .contentShape(Rectangle().inset(by: -5))
             .onHover { inside in
                 if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
             }
-            .gesture(
-                DragGesture(minimumDistance: 1)
+            // 스크롤뷰가 드래그를 가져가지 않도록 우선권을 준다 — 끄는 즉시 폭이 따라온다.
+            .highPriorityGesture(
+                DragGesture(minimumDistance: 0)
                     .onChanged { v in
                         if widthDrag?.column != c.rawValue {
                             widthDrag = (c.rawValue, width(c))
                         }
-                        if let d = widthDrag {
-                            columnWidths[c.rawValue] = min(700, max(90, d.start + v.translation.width))
-                        }
+                        guard let d = widthDrag else { return }
+                        columnWidths[c.rawValue] = min(700, max(90, d.start + v.translation.width))
                     }
                     .onEnded { _ in widthDrag = nil }
             )

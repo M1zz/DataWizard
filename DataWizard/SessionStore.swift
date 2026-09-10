@@ -38,6 +38,10 @@ struct SessionSnapshot: Codable {
     var keyColumn: String?
     /// 키가 비었을 때 만들어 줄 번호의 첫 값 (예: 6F10001).
     var keyPattern: String?
+    /// 사람이 ‘확정’으로 표시한 행들 (행 이름표).
+    var confirmedRows: [String]?
+    /// 사용자가 직접 지운 행 (`파일#줄`).
+    var deletedRows: [String]?
 
     struct FileSnapshot: Codable {
         var path: String

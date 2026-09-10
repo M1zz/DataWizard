@@ -61,6 +61,12 @@ struct BaseSheet {
     var headers: [String]                       // 원본 헤더, 파일에 적힌 순서 그대로
     var rows: [[String: String]]                // 헤더 키 행
     var columnHeader: [UnifiedColumn: String]   // 컬럼 → 이 파일의 실제 헤더 문자열
+    /// 중복으로 보이는 행들 (같은 이메일·전화·키가 앞에 이미 나온 행). **지우지 않고 표시만** 한다.
+    var duplicateRows: Set<Int> = []
+    /// 그런 무리가 몇 개인지 (2행이 한 사람이면 1무리).
+    var duplicateGroups = 0
+    /// 출력 행마다 ‘몇 번째 파일의 몇 번째 줄’인지 — 사용자가 고른 행을 정확히 지우기 위해.
+    var rowSourceIDs: [String] = []
     /// 키 컬럼으로 합치면서 한 줄로 포갠 행 수 (안내용).
     var mergedByKey = 0
     /// 키가 비어 있어 새로 만들어 준 번호 개수 (안내용).
@@ -222,11 +228,15 @@ extension BaseSheet {
 
     /// `identity`는 키가 비었을 때 ‘그래도 같은 사람인지’ 가릴 컬럼들 (이메일·전화 등).
     /// 덕분에 키가 없는 파일의 행도 새 줄을 만들지 않고 기존 줄에 붙는다.
+    /// 기본은 **행을 그대로 다 남긴다** — 올린 파일 행 수와 결과 행 수가 딱 맞아야 하니까.
+    /// 같은 사람으로 보이는 행은 `duplicateRows`에 표시만 하고, 지우는 건 사람이 결정한다.
+    /// `excluding`에 넣은 행(`파일#줄`)은 빼고 만든다 (사용자가 지운 행).
     static func stacked(_ plans: [FilePlan], name: String,
                         template: [UnifiedColumn] = [],
                         key: UnifiedColumn? = nil,
                         keyPattern: KeyPattern = .auto,
-                        identity: [UnifiedColumn] = []) -> BaseSheet {
+                        identity: [UnifiedColumn] = [],
+                        excluding: Set<String> = []) -> BaseSheet {
         var headers: [String] = []
         var seenHeader = Set<String>()
         for col in template where seenHeader.insert(col.rawValue).inserted {
@@ -251,76 +261,55 @@ extension BaseSheet {
             return given.isEmpty ? contactColumns(of: plan) : given
         }
 
+        var duplicateRows = Set<Int>()
+        var duplicateGroups = 0
+        var groupSeen = Set<String>()
+        var sourceIDs: [String] = []
+
         for (i, plan) in plans.enumerated() {
-            for src in plan.rows {
+            for (r, src) in plan.rows.enumerated() {
+                let sourceID = "\(i)#\(r)"
+                if excluding.contains(sourceID) { continue }   // 사용자가 지운 행만 빠진다
+
                 var row: [String: String] = [:]
                 for h in headers { row[h] = src[h] ?? "" }
 
-                let marksOnly = planIdentity[i].compactMap { col -> String? in
+                // 이 행이 누구인지 가릴 표식 — 키 값, 그리고 이메일·전화.
+                var marks = planIdentity[i].compactMap { col -> String? in
                     let k = identityKey(plan.compose(col, from: src))
                     return k.isEmpty ? nil : k
                 }
 
-                guard let key, let keyHeader else {
-                    // 키가 없어도 같은 사람이면 새 줄을 만들지 않는다.
-                    if let at = marksOnly.compactMap({ indexByIdentity[$0] }).first {
-                        var merged = rows[at]
-                        for h in headers where (merged[h] ?? "").isEmpty { merged[h] = row[h] ?? "" }
-                        rows[at] = merged
-                        mergedByKey += 1
-                        for m in marksOnly where indexByIdentity[m] == nil { indexByIdentity[m] = at }
-                        continue
-                    }
-                    rows.append(row)
-                    origins.append(i)
-                    for m in marksOnly where indexByIdentity[m] == nil { indexByIdentity[m] = rows.count - 1 }
-                    continue
-                }
-                let marks = marksOnly
-
-                /// 이미 있는 줄에 포갠다 — 빈칸만 채우고 기존 값은 지키지 않는다.
-                func mergeInto(_ at: Int) {
-                    var merged = rows[at]
-                    for h in headers where (merged[h] ?? "").isEmpty {
-                        merged[h] = row[h] ?? ""
-                    }
-                    rows[at] = merged
-                    mergedByKey += 1
-                    for m in marks where indexByIdentity[m] == nil { indexByIdentity[m] = at }
-                }
-
-                func appendRow(_ keyValue: String) {
-                    row[keyHeader] = keyValue
-                    rows.append(row)
-                    origins.append(i)
-                    indexByKey[keyValue.lowercased()] = rows.count - 1
-                    for m in marks where indexByIdentity[m] == nil { indexByIdentity[m] = rows.count - 1 }
-                }
-
-                let value = plan.compose(key, from: src)
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                if !value.isEmpty {
-                    if let at = indexByKey[value.lowercased()] {
-                        row[keyHeader] = value
-                        mergeInto(at)
+                if let key, let keyHeader {
+                    var value = plan.compose(key, from: src)
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    if value.isEmpty {
+                        // 키가 비면 번호를 만들어 넣는다 — 행은 그대로 남는다.
+                        repeat {
+                            value = keyPattern.value(generatedKeys)
+                            generatedKeys += 1
+                        } while indexByKey[value.lowercased()] != nil
                     } else {
-                        appendRow(value)
+                        marks.insert("k:" + value.lowercased(), at: 0)
                     }
-                    continue
+                    row[keyHeader] = value
+                    if indexByKey[value.lowercased()] == nil {
+                        indexByKey[value.lowercased()] = rows.count
+                    }
                 }
 
-                // 키가 비었다 — 이메일·전화로 같은 사람을 찾아 그 줄에 붙인다.
-                if let at = marks.compactMap({ indexByIdentity[$0] }).first {
-                    mergeInto(at)
-                    continue
+                rows.append(row)
+                origins.append(i)
+                sourceIDs.append(sourceID)
+                let at = rows.count - 1
+
+                // 앞에 같은 사람이 있었으면 ‘중복’으로 **표시만** 한다 (지우지 않는다).
+                if let first = marks.compactMap({ indexByIdentity[$0] }).first {
+                    duplicateRows.insert(at)
+                    let groupID = marks.first ?? "\(first)"
+                    if groupSeen.insert(groupID).inserted { duplicateGroups += 1 }
                 }
-                // 정말 처음 보는 사람일 때만 새 줄 + 새 번호.
-                var made = ""
-                repeat {
-                    made = keyPattern.value(generatedKeys)
-                    generatedKeys += 1
-                } while indexByKey[made.lowercased()] != nil
-                appendRow(made)
+                for m in marks where indexByIdentity[m] == nil { indexByIdentity[m] = at }
             }
         }
 
@@ -331,6 +320,8 @@ extension BaseSheet {
         }
         return BaseSheet(name: name, headers: headers, rows: rows,
                          columnHeader: columnHeader,
+                         duplicateRows: duplicateRows, duplicateGroups: duplicateGroups,
+                         rowSourceIDs: sourceIDs,
                          mergedByKey: mergedByKey, generatedKeys: generatedKeys,
                          rowOrigins: origins)
     }
