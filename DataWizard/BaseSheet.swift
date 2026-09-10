@@ -97,7 +97,9 @@ enum BaseSheetLoader {
         let name = url.lastPathComponent
         let table: (headers: [String], rows: [[String: String]])
         if url.pathExtension.lowercased() == "xlsx" {
-            table = try XLSXReader.readTable(at: url, headerRowIndex: 0)
+            // 첫 줄에 파일 제목만 있는 내보내기 파일이 흔하다 — 머리글 줄을 스스로 찾는다.
+            let t = try XLSXReader.readTableAutoHeader(at: url)
+            table = (t.headers, t.rows)
         } else {
             table = try CSVParser.readTable(at: url)
         }

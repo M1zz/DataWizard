@@ -51,6 +51,25 @@ enum XLSXReader {
         return (header, out)
     }
 
+    /// 머리글이 몇 번째 줄인지 스스로 찾아 읽는다.
+    /// 내보내기 도구들이 첫 줄에 파일 제목만 한 칸 써 두는 경우가 흔해서,
+    /// ‘이름이 채워진 칸이 가장 많은 줄’을 머리글로 본다 (앞 5줄만 살핀다).
+    static func readTableAutoHeader(at url: URL) throws -> (headers: [String], rows: [[String: String]], headerRow: Int) {
+        let grid = try readGrid(at: url)
+        guard !grid.isEmpty else { return ([], [], 0) }
+        func filled(_ row: [String]) -> Int {
+            row.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.count
+        }
+        var best = 0
+        var bestScore = filled(grid[0])
+        for i in 1..<min(grid.count, 5) where filled(grid[i]) > bestScore {
+            best = i
+            bestScore = filled(grid[i])
+        }
+        let table = try readTable(at: url, headerRowIndex: best)
+        return (table.headers, table.rows, best)
+    }
+
     /// Read a worksheet as header-keyed dictionaries, given which row holds the header.
     static func readDicts(at url: URL, headerRowIndex: Int) throws -> [[String: String]] {
         try readTable(at: url, headerRowIndex: headerRowIndex).rows

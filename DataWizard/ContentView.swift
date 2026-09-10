@@ -87,6 +87,9 @@ struct ContentView: View {
     /// 지금 자세히 보고 있는 컬럼. nil이면 목록 화면.
     @State private var openColumn: UnifiedColumn?
 
+    /// 올린 파일 원본을 그대로 들여다보는 창.
+    @State private var filePreview: FilePlan?
+
     @State private var detailColumn: UnifiedColumn?
     @State private var configColumn: UnifiedColumn?
     @State private var exampleColumn: UnifiedColumn?
@@ -138,6 +141,11 @@ struct ContentView: View {
         }
         .frame(minWidth: 820, minHeight: 580)
         .background(Color(nsColor: .windowBackgroundColor))
+        .sheet(item: $filePreview) { plan in
+            FilePreviewSheet(plan: plan,
+                             tint: fileTint(plans.firstIndex(where: { $0.id == plan.id }) ?? 0),
+                             onClose: { filePreview = nil })
+        }
         .sheet(item: $detailColumn) { col in detailSheet(col) }
         .sheet(item: $configColumn) { col in
             ColumnSourceSheet(column: col, plans: $plans, onClose: {
@@ -334,16 +342,24 @@ struct ContentView: View {
             HStack(spacing: 8) {
                 ForEach(Array(plans.enumerated()), id: \.element.id) { idx, plan in
                     HStack(spacing: 8) {
-                        Image(systemName: "doc.text.fill")
-                            .foregroundStyle(fileTint(idx))
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(plan.fileName)
-                                .font(.body.weight(.medium))
-                                .lineLimit(1).truncationMode(.middle)
-                                .help(plan.url.path)
-                            Text("\(plan.rows.count)행 · \(plan.headers.count)컬럼")
-                                .font(.body).foregroundStyle(.secondary)
+                        Button {
+                            filePreview = plan
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "doc.text.fill")
+                                    .foregroundStyle(fileTint(idx))
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(plan.fileName)
+                                        .font(.body.weight(.medium))
+                                        .lineLimit(1).truncationMode(.middle)
+                                    Text("\(plan.rows.count)행 · \(plan.headers.count)컬럼 · 눌러서 보기")
+                                        .font(.body).foregroundStyle(.secondary)
+                                }
+                            }
+                            .contentShape(Rectangle())
                         }
+                        .buttonStyle(.plain)
+                        .help("‘\(plan.fileName)’ 원본을 그대로 봅니다.")
                         Button {
                             removeWorkFile(plan)
                         } label: {
@@ -903,7 +919,7 @@ struct ContentView: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxHeight: 220)
+                .frame(maxWidth: .infinity, maxHeight: 220, alignment: .leading)
                 .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(Color(nsColor: .textBackgroundColor)))
                 .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -3954,7 +3970,7 @@ struct ContentView: View {
         do {
             let headers: [String]
             if url.pathExtension.lowercased() == "xlsx" {
-                headers = try XLSXReader.readTable(at: url, headerRowIndex: 0).headers
+                headers = try XLSXReader.readTableAutoHeader(at: url).headers
             } else {
                 headers = try CSVParser.readTable(at: url).headers
             }
@@ -6627,6 +6643,119 @@ final class PreviewModel: ObservableObject {
         selection = []; request = nil
         openCounts = [:]; decisionColumns = []
         focused = nil
+    }
+}
+
+/// 올린 파일을 **원본 그대로** 들여다보는 창.
+/// 합쳐진 결과가 아니라, 그 파일에 실제로 뭐가 들어 있는지 확인하는 용도.
+struct FilePreviewSheet: View {
+    let plan: FilePlan
+    let tint: Color
+    let onClose: () -> Void
+
+    @State private var query = ""
+
+    private var visible: [(Int, [String: String])] {
+        let all = Array(plan.rows.enumerated()).map { ($0.offset, $0.element) }
+        guard !query.isEmpty else { return all }
+        return all.filter { _, row in
+            plan.headers.contains { (row[$0] ?? "").localizedCaseInsensitiveContains(query) }
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                RoundedRectangle(cornerRadius: 3).fill(tint).frame(width: 4, height: 22)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(plan.fileName).font(.title2.weight(.bold))
+                        .lineLimit(1).truncationMode(.middle)
+                    Text("\(plan.rows.count)행 · \(plan.headers.count)컬럼"
+                         + (visible.count == plan.rows.count ? "" : " · \(visible.count)행 표시")
+                         + " — 올린 파일 그대로입니다 (정리 전)")
+                        .font(.body).foregroundStyle(.secondary)
+                }
+                Spacer()
+                TextField("값 검색…", text: $query)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 200)
+                Button { copyTable() } label: { Label("표 복사", systemImage: "doc.on.doc") }
+                    .help("이 파일을 탭 구분으로 복사합니다.")
+                Button("닫기") { onClose() }
+                    .keyboardShortcut(.cancelAction)
+            }
+            .padding(16)
+            Divider()
+            ScrollView([.horizontal, .vertical]) {
+                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                    Section {
+                        ForEach(visible.prefix(500), id: \.0) { i, row in
+                            HStack(spacing: 0) {
+                                Text("\(i + 1)")
+                                    .font(.body.monospacedDigit()).foregroundStyle(.secondary)
+                                    .frame(width: 56, alignment: .trailing)
+                                    .padding(.horizontal, 8).padding(.vertical, 4)
+                                ForEach(plan.headers, id: \.self) { h in
+                                    let v = row[h] ?? ""
+                                    Text(v.isEmpty ? "—" : v)
+                                        .font(.body)
+                                        .foregroundStyle(v.isEmpty ? Color.secondary.opacity(0.5) : .primary)
+                                        .lineLimit(1).truncationMode(.tail)
+                                        .frame(width: 190, alignment: .leading)
+                                        .padding(.horizontal, 8).padding(.vertical, 4)
+                                        .help(v)
+                                        .contextMenu {
+                                            Button("이 값 복사") { copy(v) }
+                                            Button("‘\(h)’ 열 전체 복사") {
+                                                copy(plan.rows.map { $0[h] ?? "" }.joined(separator: "\n"))
+                                            }
+                                        }
+                                }
+                            }
+                            .background(i.isMultiple(of: 2) ? Color.clear : tint.opacity(0.06))
+                            Divider()
+                        }
+                    } header: {
+                        HStack(spacing: 0) {
+                            Text("행")
+                                .font(.body.weight(.semibold)).foregroundStyle(.secondary)
+                                .frame(width: 56, alignment: .trailing)
+                                .padding(.horizontal, 8).padding(.vertical, 6)
+                            ForEach(plan.headers, id: \.self) { h in
+                                Text(h)
+                                    .font(.body.weight(.semibold))
+                                    .lineLimit(2).truncationMode(.tail)
+                                    .frame(width: 190, alignment: .leading)
+                                    .padding(.horizontal, 8).padding(.vertical, 6)
+                                    .help(h)
+                            }
+                        }
+                        .background(Color(nsColor: .underPageBackgroundColor))
+                    }
+                }
+            }
+            if visible.count > 500 {
+                Divider()
+                Text("앞 500행만 보여 줍니다 — 전체는 ‘표 복사’로 가져가세요.")
+                    .font(.body).foregroundStyle(.secondary)
+                    .padding(.horizontal, 16).padding(.vertical, 6)
+            }
+        }
+        .frame(minWidth: 860, minHeight: 520)
+    }
+
+    private func copy(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    private func copyTable() {
+        var lines = [(["행"] + plan.headers).joined(separator: "\t")]
+        for (i, row) in visible {
+            let cells = plan.headers.map { (row[$0] ?? "").replacingOccurrences(of: "\t", with: " ") }
+            lines.append((["\(i + 1)"] + cells).joined(separator: "\t"))
+        }
+        copy(lines.joined(separator: "\n"))
     }
 }
 
