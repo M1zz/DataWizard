@@ -580,78 +580,101 @@ struct ContentView: View {
         let flagged = openValues(review)
         let shown = neighborColumns(col)
         let rows = proposalSampleRows(col, flagged: flagged)
-        if !rows.isEmpty {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: 0) {
-                    Text("파일")
-                        .font(.body.weight(.semibold)).foregroundStyle(.secondary)
-                        .frame(width: 120, alignment: .leading)
-                        .padding(.horizontal, 8).padding(.vertical, 5)
-                    ForEach(shown) { c in
-                        let here = (c == col)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(c.rawValue)
-                                .font(.body.weight(here ? .bold : .semibold))
-                                .foregroundStyle(here ? Color.accentColor : .secondary)
-                                .lineLimit(1).truncationMode(.tail)
-                            if here {
-                                Text("지금 볼 컬럼")
-                                    .font(.body).foregroundStyle(Color.accentColor)
-                            }
-                        }
-                        .frame(width: here ? 190 : 130, alignment: .leading)
-                        .padding(.horizontal, 8).padding(.vertical, 5)
-                        .background(here ? Color.accentColor.opacity(0.16) : .clear)
-                        .overlay(alignment: .leading) { proposalEdge(here) }
-                        .overlay(alignment: .trailing) { proposalEdge(here) }
+        let border: Color = Color.primary.opacity(0.08)
+        return Group {
+            if !rows.isEmpty {
+                VStack(alignment: .leading, spacing: 0) {
+                    proposalHeaderRow(shown, focus: col)
+                    ForEach(rows.indices, id: \.self) { i in
+                        proposalRow(rows[i], shown: shown, focus: col, flagged: flagged)
                     }
                 }
-                .background(Color.primary.opacity(0.04))
-                ForEach(rows.indices, id: \.self) { i in
-                    let item = rows[i]
-                    let plan = plans[item.file]
-                    HStack(spacing: 0) {
-                        HStack(spacing: 5) {
-                            RoundedRectangle(cornerRadius: 2).fill(fileTint(item.file))
-                                .frame(width: 3, height: 12)
-                            Text(plan.fileName)
-                                .font(.body).foregroundStyle(fileTint(item.file))
-                                .lineLimit(1).truncationMode(.middle)
-                        }
-                        .frame(width: 120, alignment: .leading)
-                        .padding(.horizontal, 8).padding(.vertical, 4)
-                        ForEach(shown) { c in
-                            let here = (c == col)
-                            let value = plan.isMapped(c) ? plan.compose(c, from: item.row) : ""
-                            let bad = here && flagged.contains(value)
-                            HStack(spacing: 4) {
-                                Text(value.isEmpty ? "—" : value)
-                                    .font(.body.weight(bad ? .semibold : .regular))
-                                    .foregroundStyle(bad ? Color.primary
-                                                     : (value.isEmpty ? Color.secondary.opacity(0.5)
-                                                        : (here ? .primary : .secondary)))
-                                    .lineLimit(1).truncationMode(.tail)
-                                if bad {
-                                    Image(systemName: "exclamationmark.triangle.fill")
-                                        .font(.body).foregroundStyle(.orange)
-                                }
-                            }
-                            .frame(width: here ? 190 : 130, alignment: .leading)
-                            .padding(.horizontal, 8).padding(.vertical, 4)
-                            .background(here ? Color.accentColor.opacity(0.10) : .clear)
-                            .overlay(alignment: .leading) { proposalEdge(here) }
-                            .overlay(alignment: .trailing) { proposalEdge(here) }
-                            .help(value)
-                        }
-                    }
-                    .background(fileTint(item.file).opacity(0.08))
-                }
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color(nsColor: .textBackgroundColor)))
+                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(border, lineWidth: 1))
             }
-            .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color(nsColor: .textBackgroundColor)))
-            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.primary.opacity(0.08), lineWidth: 1))
         }
+    }
+
+    /// 미니 표의 머리글 — 지금 보는 컬럼만 넓게, 파랗게.
+    private func proposalHeaderRow(_ shown: [UnifiedColumn], focus: UnifiedColumn) -> some View {
+        HStack(spacing: 0) {
+            Text("파일")
+                .font(.body.weight(.semibold)).foregroundStyle(.secondary)
+                .frame(width: 120, alignment: .leading)
+                .padding(.horizontal, 8).padding(.vertical, 5)
+            ForEach(shown) { c in proposalHeaderCell(c, focus: focus) }
+        }
+        .background(Color.primary.opacity(0.04))
+    }
+
+    private func proposalHeaderCell(_ c: UnifiedColumn, focus: UnifiedColumn) -> some View {
+        let here = (c == focus)
+        let width: CGFloat = here ? 190 : 130
+        let background: Color = here ? Color.accentColor.opacity(0.16) : Color.clear
+        return VStack(alignment: .leading, spacing: 1) {
+            Text(c.rawValue)
+                .font(.body.weight(here ? .bold : .semibold))
+                .foregroundStyle(here ? Color.accentColor : Color.secondary)
+                .lineLimit(1).truncationMode(.tail)
+            if here {
+                Text("지금 볼 컬럼").font(.body).foregroundStyle(Color.accentColor)
+            }
+        }
+        .frame(width: width, alignment: .leading)
+        .padding(.horizontal, 8).padding(.vertical, 5)
+        .background(background)
+        .overlay(alignment: .leading) { proposalEdge(here) }
+        .overlay(alignment: .trailing) { proposalEdge(here) }
+    }
+
+    private func proposalRow(_ item: (file: Int, row: [String: String]),
+                             shown: [UnifiedColumn], focus: UnifiedColumn,
+                             flagged: Set<String>) -> some View {
+        let plan = plans[item.file]
+        let tint: Color = fileTint(item.file)
+        return HStack(spacing: 0) {
+            HStack(spacing: 5) {
+                RoundedRectangle(cornerRadius: 2).fill(tint).frame(width: 3, height: 12)
+                Text(plan.fileName)
+                    .font(.body).foregroundStyle(tint)
+                    .lineLimit(1).truncationMode(.middle)
+            }
+            .frame(width: 120, alignment: .leading)
+            .padding(.horizontal, 8).padding(.vertical, 4)
+            ForEach(shown) { c in
+                proposalCell(c, plan: plan, row: item.row, focus: focus, flagged: flagged)
+            }
+        }
+        .background(tint.opacity(0.08))
+    }
+
+    private func proposalCell(_ c: UnifiedColumn, plan: FilePlan, row: [String: String],
+                              focus: UnifiedColumn, flagged: Set<String>) -> some View {
+        let here = (c == focus)
+        let value = plan.isMapped(c) ? plan.compose(c, from: row) : ""
+        let bad = here && flagged.contains(value)
+        let width: CGFloat = here ? 190 : 130
+        let background: Color = here ? Color.accentColor.opacity(0.10) : Color.clear
+        let color: Color = value.isEmpty ? Color.secondary.opacity(0.5)
+            : (here ? Color.primary : Color.secondary)
+        return HStack(spacing: 4) {
+            Text(value.isEmpty ? "—" : value)
+                .font(.body.weight(bad ? .semibold : .regular))
+                .foregroundStyle(color)
+                .lineLimit(1).truncationMode(.tail)
+            if bad {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.body).foregroundStyle(.orange)
+            }
+        }
+        .frame(width: width, alignment: .leading)
+        .padding(.horizontal, 8).padding(.vertical, 4)
+        .background(background)
+        .overlay(alignment: .leading) { proposalEdge(here) }
+        .overlay(alignment: .trailing) { proposalEdge(here) }
+        .help(value)
     }
 
     /// 지금 보는 컬럼의 좌우 세로선 — 표를 관통하는 기둥으로 읽히게.
@@ -1186,42 +1209,60 @@ struct ContentView: View {
     /// 지금 합치면 이렇게 나온다 — 실제 값으로 보여 주는 미리보기.
     @ViewBuilder
     private var workPreviewCard: some View {
-        if !plans.isEmpty && !preview.rows.isEmpty {
-            let cols = preview.columns.isEmpty ? finalColumns : preview.columns
-            let sample = previewSampleRows()
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text("완성본 미리보기").font(.headline)
-                    Text("지금 상태로 만들어진 결과입니다 — 전체 \(preview.rows.count)행 중 \(sample.count)줄")
-                        .font(.body).foregroundStyle(.secondary)
-                    Spacer()
+        // 조각으로 나눠 둔다 — 한 덩어리로 두면 에디터(SourceKit)가 타입 추론을 포기하고
+        // ‘Ambiguous use of opacity’ 같은 엉뚱한 오류를 띄운다.
+        Group {
+            if !plans.isEmpty && !preview.rows.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    previewCardHeader
+                    previewTable
+                    previewLegend
                 }
-                ScrollView([.horizontal, .vertical]) {
-                    VStack(alignment: .leading, spacing: 0) {
-                        previewHeaderRow(cols)
-                        ForEach(sample, id: \.self) { i in
-                            previewBodyRow(cols, at: i)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .frame(maxWidth: .infinity, maxHeight: 220, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color(nsColor: .textBackgroundColor)))
-                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(Color.primary.opacity(0.08), lineWidth: 1))
-                previewLegend
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(previewCardBackground)
             }
-            .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.primary.opacity(0.03)))
         }
+    }
+
+    private var previewCardHeader: some View {
+        let sample = previewSampleRows()
+        return HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text("완성본 미리보기").font(.headline)
+            Text("지금 상태로 만들어진 결과입니다 — 전체 \(preview.rows.count)행 중 \(sample.count)줄")
+                .font(.body).foregroundStyle(.secondary)
+            Spacer()
+        }
+    }
+
+    private var previewTable: some View {
+        let cols: [UnifiedColumn] = preview.columns.isEmpty ? finalColumns : preview.columns
+        let sample: [Int] = previewSampleRows()
+        let border: Color = Color.primary.opacity(0.08)
+        return ScrollView([.horizontal, .vertical]) {
+            VStack(alignment: .leading, spacing: 0) {
+                previewHeaderRow(cols)
+                ForEach(sample, id: \.self) { i in
+                    previewBodyRow(cols, at: i)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, maxHeight: 220, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(Color(nsColor: .textBackgroundColor)))
+        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .stroke(border, lineWidth: 1))
+    }
+
+    private var previewCardBackground: some View {
+        let fill: Color = Color.primary.opacity(0.03)
+        return RoundedRectangle(cornerRadius: 12, style: .continuous).fill(fill)
     }
 
     private func previewHeaderRow(_ cols: [UnifiedColumn]) -> some View {
         HStack(spacing: 0) {
-            Text("행 · 출처")
+            Text("행 · 어느 파일에서")
                 .font(.body.weight(.semibold)).foregroundStyle(.secondary)
                 .frame(width: 150, alignment: .leading)
                 .padding(.horizontal, 8).padding(.vertical, 6)
@@ -7234,7 +7275,11 @@ final class PreviewModel: ObservableObject {
     func fileLabel(row i: Int) -> String {
         guard i < rowFiles.count else { return "" }
         let f = rowFiles[i]
-        guard f >= 0 else { return baseName.isEmpty ? "새 행" : baseName }
+        guard f >= 0 else {
+            // 올린 파일에서 온 게 아닌 줄 — 틀에 원래 있던 행이거나, 출처를 모르는 행.
+            if newRows.contains(i) { return baseName.isEmpty ? "이번에 추가" : "틀에 없던 사람" }
+            return baseName.isEmpty ? "출처 모름" : baseName
+        }
         return f < fileNames.count ? fileNames[f] : "파일 \(f + 1)"
     }
 
@@ -7639,7 +7684,7 @@ struct PreviewWindowView: View {
                             }
                         } header: {
                             HStack(spacing: 0) {
-                                Text(model.rowFiles.isEmpty ? "확정 · 행" : "확정 · 행 · 출처")
+                                Text(model.rowFiles.isEmpty ? "확정 · 행" : "확정 · 행 · 어느 파일에서 왔나")
                                     .font(.body.weight(.semibold)).foregroundStyle(.secondary)
                                     .frame(width: model.rowFiles.isEmpty ? 82 : 215, alignment: .leading)
                                     .padding(.horizontal, 8).padding(.vertical, 6)

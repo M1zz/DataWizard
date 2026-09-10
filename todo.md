@@ -790,3 +790,18 @@
 - [x] 지운 행 목록은 세션에 저장 (되살리기 가능)
 - 검증(실제 파일): 632행 → **632행** · 중복 표시 83행(81명) · 사용자가 지우면 549행,
   되살리면 632행
+
+### Xcode에만 계속 뜨던 `Ambiguous use of 'opacity'`
+- 원인: 컴파일은 되는데 **에디터(SourceKit)가 타입 추론을 제한 시간 안에 못 끝내고** 포기하면서
+  엉뚱한 위치·문구로 오류를 띄우던 것. `-warn-long-function-bodies`로 재 보니
+  `proposalPreview`가 **2457ms** (한도 800ms)
+- [x] `proposalPreview`를 `proposalHeaderRow` / `proposalHeaderCell` / `proposalRow` /
+      `proposalCell` 로 쪼개고, 색·폭에 타입을 명시 (`let border: Color = …`)
+- [x] `workPreviewCard`도 `previewCardHeader` / `previewTable` / `previewCardBackground` 로 분리
+- 확인: 느린 표현식 경고 **0건**, `xcodebuild` BUILD SUCCEEDED
+
+### ‘행 · 출처’와 ‘새 행’이 무슨 말인지 모르겠다는 피드백
+- [x] 머리글 문구를 풀어서: `행 · 출처` → **`행 · 어느 파일에서`**
+      (미리보기 창은 `확정 · 행 · 어느 파일에서 왔나`)
+- [x] 출처를 모르는 줄의 표시도 상황에 맞게:
+      `이번에 추가`(틀에 없던 사람) / `틀에 없던 사람` / `출처 모름`
