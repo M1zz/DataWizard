@@ -10,6 +10,10 @@ struct BaseSheet {
     var headers: [String]                       // 원본 헤더, 파일에 적힌 순서 그대로
     var rows: [[String: String]]                // 헤더 키 행
     var columnHeader: [UnifiedColumn: String]   // 컬럼 → 이 파일의 실제 헤더 문자열
+    /// 키 컬럼으로 합치면서 한 줄로 포갠 행 수 (안내용).
+    var mergedByKey = 0
+    /// 키가 비어 있어 새로 만들어 준 번호 개수 (안내용).
+    var generatedKeys = 0
     /// 각 행이 몇 번째로 올린 파일에서 왔는지 (`stacked`로 만든 시트만).
     /// 미리보기에서 파일마다 색을 달리 보여 주기 위한 것. 사용자가 고른 틀이면 비어 있다.
     var rowOrigins: [Int] = []
@@ -129,8 +133,12 @@ extension BaseSheet {
     /// ‘고른 컬럼만 바뀐 합본’을 만들 수 있다.
     /// `template`을 주면 그 컬럼 이름·순서를 먼저 깔고, 파일에만 있는 컬럼을 뒤에 붙인다.
     /// (틀에서 **컬럼명만** 가져오는 흐름 — 틀의 값은 한 줄도 들어오지 않는다.)
+    /// `key`를 주면 **같은 키를 가진 행을 한 줄로 포갠다** (파일이 달라도 같은 사람이면 한 줄).
+    /// 먼저 들어온 값이 이기고, 빈칸만 뒤 파일 값으로 채운다.
+    /// 키가 비어 있는 행에는 `AUTO-0001` 같은 번호를 만들어 넣는다 (그 행도 한 줄로 남는다).
     static func stacked(_ plans: [FilePlan], name: String,
-                        template: [UnifiedColumn] = []) -> BaseSheet {
+                        template: [UnifiedColumn] = [],
+                        key: UnifiedColumn? = nil) -> BaseSheet {
         var headers: [String] = []
         var seenHeader = Set<String>()
         for col in template where seenHeader.insert(col.rawValue).inserted {
@@ -142,13 +150,47 @@ extension BaseSheet {
 
         var rows: [[String: String]] = []
         var origins: [Int] = []
+        var mergedByKey = 0
+        var generatedKeys = 0
+        var indexByKey: [String: Int] = [:]
+        let keyHeader = key.flatMap { k in headers.first { $0 == k.rawValue } }
         rows.reserveCapacity(plans.reduce(0) { $0 + $1.rows.count })
+
         for (i, plan) in plans.enumerated() {
             for src in plan.rows {
                 var row: [String: String] = [:]
                 for h in headers { row[h] = src[h] ?? "" }
-                rows.append(row)
-                origins.append(i)
+
+                guard let key, let keyHeader else {
+                    rows.append(row)
+                    origins.append(i)
+                    continue
+                }
+                var value = plan.compose(key, from: src)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if value.isEmpty {
+                    generatedKeys += 1
+                    value = String(format: "AUTO-%04d", generatedKeys)
+                    row[keyHeader] = value
+                    rows.append(row)
+                    origins.append(i)
+                    indexByKey[value.lowercased()] = rows.count - 1
+                    continue
+                }
+                row[keyHeader] = value
+                if let at = indexByKey[value.lowercased()] {
+                    // 같은 키 — 한 줄로 포갠다. 빈칸만 채우고 이미 있는 값은 지키지 않는다.
+                    var merged = rows[at]
+                    for h in headers where (merged[h] ?? "").isEmpty {
+                        merged[h] = row[h] ?? ""
+                    }
+                    rows[at] = merged
+                    mergedByKey += 1
+                } else {
+                    rows.append(row)
+                    origins.append(i)
+                    indexByKey[value.lowercased()] = rows.count - 1
+                }
             }
         }
 
@@ -158,7 +200,9 @@ extension BaseSheet {
             columnHeader[col] = h
         }
         return BaseSheet(name: name, headers: headers, rows: rows,
-                         columnHeader: columnHeader, rowOrigins: origins)
+                         columnHeader: columnHeader,
+                         mergedByKey: mergedByKey, generatedKeys: generatedKeys,
+                         rowOrigins: origins)
     }
 }
 

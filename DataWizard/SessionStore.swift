@@ -34,6 +34,8 @@ struct SessionSnapshot: Codable {
     /// 컬럼 이름만 빌려 온 틀 (값은 안 가져옴).
     var templateName: String?
     var templateColumns: [String]?
+    /// 여러 파일을 합칠 때 ‘같은 행’을 가리는 키 컬럼.
+    var keyColumn: String?
 
     struct FileSnapshot: Codable {
         var path: String

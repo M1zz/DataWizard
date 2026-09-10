@@ -47,6 +47,10 @@ struct ContentView: View {
     @State private var templateColumns: [UnifiedColumn] = []
     /// 틀 파일의 컬럼별 값 — 결과에는 안 들어가고, ‘이 컬럼이 저 컬럼이구나’를 가리는 데만 쓴다.
     @State private var templateValues: [UnifiedColumn: [String]] = [:]
+    /// 여러 파일을 합칠 때 ‘같은 행’을 가리는 키 컬럼 (nil이면 그냥 세로로 쌓기).
+    @State private var keyColumn: UnifiedColumn?
+    /// 사용자가 직접 골랐는가 — 자동 추천이 그 위를 덮어쓰지 않게.
+    @State private var keyColumnChosen = false
     /// 자동으로 짝지은 컬럼 (되돌리기용 스냅샷과 함께).
     @State private var autoMatched: [(source: UnifiedColumn, target: UnifiedColumn)] = []
     @State private var undoPlans: [FilePlan]?
@@ -116,6 +120,8 @@ struct ContentView: View {
     /// 파일을 읽는 동안 화면이 멈춘 것처럼 보이지 않게 — 진행 표시.
     @State private var isLoadingFiles = false
     @State private var loadingNote = ""
+    /// 버튼을 눌러 잠깐 기다려야 할 때 화면에 띄우는 안내 (nil이면 안 띄움).
+    @State private var busyNote: String?
     @State private var isRunning = false
 
     // 전화번호(Clean) 목표 포맷 템플릿 — 모든 번호를 이 한 가지 표기로 통일.
@@ -144,6 +150,7 @@ struct ContentView: View {
         }
         .frame(minWidth: 820, minHeight: 580)
         .background(Color(nsColor: .windowBackgroundColor))
+        .overlay { if busyNote != nil { loadingOverlay } }
         .sheet(item: $filePreview) { plan in
             FilePreviewSheet(plan: plan,
                              tint: fileTint(plans.firstIndex(where: { $0.id == plan.id }) ?? 0),
@@ -185,7 +192,7 @@ struct ContentView: View {
                              targetSamples: matchSamples,
                              onApply: { pairs in
                                  showMatchSheet = false
-                                 applyMatches(pairs)
+                                 withBusy("컬럼을 합치는 중…") { applyMatches(pairs) }
                              },
                              onClose: { showMatchSheet = false })
         }
@@ -275,13 +282,23 @@ struct ContentView: View {
         .onChange(of: focusColumns) { _ in refreshPreview() }
     }
 
+    /// 눌러서 기다려야 하는 동작을 한 곳에서 처리한다.
+    /// 안내를 먼저 그린 다음(한 프레임 뒤) 실제 작업을 시작해, 화면이 멈춘 것처럼 보이지 않게 한다.
+    private func withBusy(_ note: String, _ work: @escaping () -> Void) {
+        busyNote = note
+        DispatchQueue.main.async {
+            work()
+            busyNote = nil
+        }
+    }
+
     /// 파일을 읽는 동안 덮어 두는 진행 표시 — ‘멈춘 게 아니라 일하는 중’임을 보여 준다.
     private var loadingOverlay: some View {
         ZStack {
             Color.black.opacity(0.08).ignoresSafeArea()
             VStack(spacing: 12) {
                 ProgressView().controlSize(.large)
-                Text(loadingNote.isEmpty ? "여는 중…" : loadingNote)
+                Text(busyNote ?? (loadingNote.isEmpty ? "여는 중…" : loadingNote))
                     .font(.body.weight(.medium))
                     .lineLimit(2).multilineTextAlignment(.center)
                 Text("파일이 크면 몇 초 걸릴 수 있어요")
@@ -342,7 +359,8 @@ struct ContentView: View {
                 .disabled(isLoadingFiles)
             Button {
                 // 고른 게 없으면 막지 않는다 — 손 안 대고 그대로 뽑는 것도 정상적인 결과.
-                if focusColumns.isEmpty { runMerge() } else { startWork() }
+                if focusColumns.isEmpty { runMerge() }
+                else { withBusy("검토 화면을 만드는 중…") { startWork() } }
             } label: {
                 HStack {
                     if isRunning { ProgressView().controlSize(.small) }
@@ -587,7 +605,7 @@ struct ContentView: View {
                             HStack(spacing: 4) {
                                 Text(value.isEmpty ? "—" : value)
                                     .font(.body.weight(bad ? .semibold : .regular))
-                                    .foregroundStyle(bad ? Color.orange
+                                    .foregroundStyle(bad ? Color.primary
                                                      : (value.isEmpty ? Color.secondary.opacity(0.5)
                                                         : (here ? .primary : .secondary)))
                                     .lineLimit(1).truncationMode(.tail)
@@ -672,7 +690,7 @@ struct ContentView: View {
                 HStack(spacing: 10) {
                     Button {
                         focusColumns = [col]
-                        startWork()
+                        withBusy("‘\(col.rawValue)’ 검토 화면을 만드는 중…") { startWork() }
                     } label: {
                         Text("이것부터 고치기 →").fontWeight(.semibold)
                     }
@@ -982,13 +1000,14 @@ struct ContentView: View {
             : (isEmpty ? "비어 있음 — 채울 칸을 골라 주세요"
                : (split ? splitCaption(col)
                   : (owners.isEmpty ? nil : (plans.count > 1 ? "모든 파일에 있음" : nil))))
-        let captionTint: Color = here ? .accentColor : (split || isEmpty ? .orange : .secondary)
+        // 주황 글씨는 눈이 아파서 신호는 점·배경으로만 주고, 글씨는 회색으로.
+        let captionTint: Color = here ? .accentColor : .secondary
         let background: Color = here ? Color.accentColor.opacity(0.16)
             : (owner?.opacity(0.16) ?? (split ? Color.orange.opacity(0.10) : Color.clear))
         return VStack(alignment: .leading, spacing: 1) {
             Text(col.rawValue)
                 .font(.body.weight(here ? .bold : .semibold))
-                .foregroundStyle(here ? Color.accentColor : (split ? Color.orange : .primary))
+                .foregroundStyle(here ? Color.accentColor : .primary)
                 .lineLimit(1).truncationMode(.tail)
             if let caption {
                 HStack(spacing: 4) {
@@ -1137,6 +1156,9 @@ struct ContentView: View {
         let detail: String
         var actionTitle: String? = nil
         var action: (() -> Void)? = nil
+        /// 고를 거리가 있는 단계(키 고르기)용 — 메뉴 항목들.
+        var menuTitle: String? = nil
+        var menuOptions: [(title: String, action: () -> Void)] = []
     }
 
     /// 지금 결과에서 값이 하나도 없는 컬럼 — 틀에만 있거나, 파일에 값이 안 들어온 컬럼.
@@ -1160,6 +1182,36 @@ struct ContentView: View {
         guard plans.count > 1 || baseIsUserFile else { return [] }
         var out: [MergeStep] = []
 
+        if plans.count > 1 {
+            let rows = plans.reduce(0) { $0 + $1.rows.count }
+            let merged = base?.mergedByKey ?? 0
+            let made = base?.generatedKeys ?? 0
+            var detail: String
+            if let keyColumn {
+                detail = "같은 ‘\(keyColumn.rawValue)’ 값이면 파일이 달라도 한 줄로 포갭니다."
+                detail += merged > 0
+                    ? "\n\(rows)행 → \(base?.rows.count ?? rows)행 (같은 키 \(merged)행을 포갰어요)"
+                    : "\n\(rows)행 그대로 — 겹치는 키가 없었습니다."
+                if made > 0 { detail += "\n키가 비어 있던 \(made)행에는 AUTO-0001처럼 번호를 만들어 넣었어요." }
+            } else {
+                detail = "지금은 키 없이 파일을 세로로 쌓기만 합니다 — 같은 사람이 여러 파일에 있으면 여러 줄로 남아요."
+                if let auto = autoKeyColumn() { detail += "\n‘\(auto.rawValue)’를 키로 쓰면 한 줄로 포갤 수 있습니다." }
+            }
+            var options: [(title: String, action: () -> Void)] = [
+                ("키 없이 그냥 쌓기", { applyKeyColumn(nil) })
+            ]
+            for c in keyCandidates.prefix(8) {
+                options.append(("‘\(c.rawValue)’를 키로", { applyKeyColumn(c) }))
+            }
+            out.append(MergeStep(
+                id: "key",
+                symbol: "key.fill", tint: .accentColor,
+                title: keyColumn.map { "키 컬럼: ‘\($0.rawValue)’" } ?? "키 컬럼: 없음 (그냥 쌓기)",
+                detail: detail,
+                menuTitle: "키 바꾸기",
+                menuOptions: options))
+        }
+
         if !autoMatched.isEmpty {
             let names = autoMatched.prefix(4)
                 .map { "\($0.source.rawValue) → \($0.target.rawValue)" }
@@ -1170,7 +1222,8 @@ struct ContentView: View {
                 title: "자동으로 채운 컬럼 \(autoMatched.count)개",
                 detail: "값이 같아 보여서 이렇게 이어 붙였어요. 맞으면 그대로 두세요.\n" + names
                     + (autoMatched.count > 4 ? "\n…" : ""),
-                actionTitle: "되돌리기", action: { undoAutoMatch() }))
+                actionTitle: "되돌리기",
+                action: { withBusy("되돌리는 중…") { undoAutoMatch() } }))
         }
         if !matchSuggestions.isEmpty {
             out.append(MergeStep(
@@ -1188,7 +1241,7 @@ struct ContentView: View {
                 detail: "합치는 데는 문제없지만, 한 형식으로 맞추지 않으면 결과에 두 가지 표기가 섞입니다.",
                 actionTitle: "‘\(col.rawValue)’ 정리하기", action: {
                     focusColumns = [col]
-                    startWork()
+                    withBusy("‘\(col.rawValue)’ 검토 화면을 만드는 중…") { startWork() }
                 }))
         }
         let paired = Set(matchSuggestions.map(\.source))
@@ -1296,6 +1349,14 @@ struct ContentView: View {
                 if let title = step.actionTitle, let action = step.action {
                     Button(action: action) { Text(title).fontWeight(.semibold) }
                         .buttonStyle(.borderedProminent)
+                }
+                if let menuTitle = step.menuTitle, !step.menuOptions.isEmpty {
+                    Menu(menuTitle) {
+                        ForEach(step.menuOptions.indices, id: \.self) { i in
+                            Button(step.menuOptions[i].title) { step.menuOptions[i].action() }
+                        }
+                    }
+                    .fixedSize()
                 }
                 Button(step.actionTitle == nil ? "알겠어요" : "이대로 둘게요") {
                     withAnimation(.easeInOut(duration: 0.15)) {
@@ -1530,7 +1591,10 @@ struct ContentView: View {
         finalColumns = ColumnReviewBuilder.plainColumns(in: plans)
         reviews = ColumnReviewBuilder.plainReviews(in: plans)
         seedValueMap(from: reviews)
-        if !baseIsUserFile { base = BaseSheet.stacked(plans, name: stackedName(plans)) }
+        if !baseIsUserFile {
+            base = BaseSheet.stacked(plans, name: stackedName(plans),
+                                     template: templateColumns, key: keyColumn)
+        }
 
         var next = before.intersection(Set(finalColumns))
         for pair in pairs where before.contains(pair.source) { next.insert(pair.target) }
@@ -1590,7 +1654,7 @@ struct ContentView: View {
                         .lineLimit(1).truncationMode(.tail).help(col.rawValue)
                     Text(status.text)
                         .font(.body)
-                        .foregroundStyle(status.warn ? Color.orange : Color.secondary)
+                        .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 8)
                 if partial {
@@ -2485,7 +2549,7 @@ struct ContentView: View {
                         .lineLimit(1).truncationMode(.tail).help(col.rawValue)
                     Text(status.text)
                         .font(.body)
-                        .foregroundStyle(status.warn ? Color.orange : Color.secondary)
+                        .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 8)
                 if status.warn {
@@ -3770,7 +3834,8 @@ struct ContentView: View {
         patch = nil
         result = nil
         if !baseIsUserFile {
-            base = BaseSheet.stacked(built, name: stackedName(built), template: templateColumns)
+            base = BaseSheet.stacked(built, name: stackedName(built),
+                                     template: templateColumns, key: keyColumn)
         }
         finalColumns = (!baseIsUserFile ? base?.columns : nil)
             ?? ColumnReviewBuilder.plainColumns(in: built)
@@ -3792,6 +3857,13 @@ struct ContentView: View {
         refreshMatches()
         // 틀이 있으면, 채울 수 있는 컬럼은 묻지 않고 바로 채운다.
         if !templateColumns.isEmpty { autoMatchTemplateColumns() }
+        // 키는 자동으로 골라 두고, 합치기 단계에서 확인만 받는다.
+        if !keyColumnChosen, plans.count > 1, let auto = autoKeyColumn() {
+            keyColumn = auto
+            base = BaseSheet.stacked(plans, name: stackedName(plans),
+                                     template: templateColumns, key: auto)
+            finalColumns = base?.columns ?? finalColumns
+        }
         includedColumns = focusColumns
         preview.reset()
         refreshPreview()      // 첫 화면 카드가 곧 완성본이라 미리 만들어 둔다
@@ -3858,6 +3930,8 @@ struct ContentView: View {
     /// 올린 파일을 그대로 합치는 중이면 행 순서로, 따로 불러온 통합본에
     /// 이어붙이는 중이면 Code→전화→이메일 키로 짝짓는다.
     private var rowMatch: RowMatch {
+        // 키로 포갠 결과물은 행 수가 원본과 다르다 — 그 키로 짝지어야 값이 제자리에 간다.
+        if let keyColumn, !baseIsUserFile { return .column(keyColumn) }
         if isUtility && !baseIsUserFile { return .position }
         if let matchColumn { return .column(matchColumn) }
         return .key
@@ -3971,7 +4045,8 @@ struct ContentView: View {
             finalColumns = []
             return
         }
-        base = BaseSheet.stacked(plans, name: stackedName(plans), template: templateColumns)
+        base = BaseSheet.stacked(plans, name: stackedName(plans),
+                                 template: templateColumns, key: keyColumn)
         finalColumns = base?.columns ?? ColumnReviewBuilder.plainColumns(in: plans)
         reviews = ColumnReviewBuilder.plainReviews(in: plans)
         seedValueMap(from: reviews)
@@ -4106,13 +4181,13 @@ struct ContentView: View {
             focusColumns = Set(valid)
             preview.selection = []
             bringMainWindowToFront()
-            startWork()
+            withBusy("검토 화면을 만드는 중…") { startWork() }
         case .merge(let a, let b):
-            mergeTwoColumns(a, b)
             preview.selection = []
             bringMainWindowToFront()
+            withBusy("두 컬럼을 합치는 중…") { mergeTwoColumns(a, b) }
         case .edit(let col, let before, let after):
-            editValue(col, from: before, to: after)
+            withBusy("값을 바꾸는 중…") { editValue(col, from: before, to: after) }
         }
     }
 
@@ -4150,9 +4225,11 @@ struct ContentView: View {
 
     /// 완성본 미리보기 창 열기 — 사용자가 직접 연 것임을 표시해 둔다.
     private func openPreviewWindow() {
-        refreshPreview()
         preview.openedByUser = true
-        openWindow(id: "preview")
+        withBusy("완성본 미리보기를 만드는 중…") {
+            refreshPreview()
+            openWindow(id: "preview")
+        }
     }
 
     private func refreshPreview() {
@@ -4202,6 +4279,43 @@ struct ContentView: View {
         preview.rowFiles = current.origins.isEmpty ? planRowOrigins(rows.count) : current.origins
         preview.fileNames = plans.map(\.fileName)
         sendColumnMarks()
+    }
+
+    /// 키로 삼을 만한 컬럼들 — 값이 (거의) 행마다 고유하고 잘 채워진 컬럼.
+    private var keyCandidates: [UnifiedColumn] {
+        finalColumns.filter { col in
+            guard plans.contains(where: { $0.isMapped(col) }) else { return false }
+            var seen = Set<String>()
+            var filled = 0, dup = 0, total = 0
+            for plan in plans where plan.isMapped(col) {
+                for row in plan.rows {
+                    total += 1
+                    let v = plan.compose(col, from: row).trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !v.isEmpty else { continue }
+                    filled += 1
+                    if !seen.insert(v.lowercased()).inserted { dup += 1 }
+                }
+            }
+            guard total > 0, filled * 2 >= total else { return false }   // 절반 이상 채워져 있고
+            return dup * 10 <= filled                                    // 겹치는 값이 10% 이하
+        }
+    }
+
+    /// 키를 자동으로 골라 준다 — Code·사번처럼 사람을 가리키는 컬럼 먼저.
+    private func autoKeyColumn() -> UnifiedColumn? {
+        let candidates = keyCandidates
+        for preferred in [UnifiedColumn.code, .email, .phone]
+        where candidates.contains(preferred) { return preferred }
+        return candidates.first
+    }
+
+    /// 키가 바뀌면 결과물(기준선)을 다시 만든다.
+    private func applyKeyColumn(_ col: UnifiedColumn?) {
+        keyColumn = col
+        keyColumnChosen = true
+        withBusy(col == nil ? "그냥 쌓는 중…" : "‘\(col!.rawValue)’ 기준으로 합치는 중…") {
+            rebuildWorkColumns()
+        }
     }
 
     /// 올린 파일들의 행 수로 만든 ‘행 → 파일’ 표. 개수가 맞지 않으면 빈 배열.
@@ -4451,7 +4565,8 @@ struct ContentView: View {
             baseIsUserFile: baseIsUserFile,
             matchColumn: matchColumn?.rawValue,
             templateName: templateName,
-            templateColumns: templateColumns.map { $0.rawValue })
+            templateColumns: templateColumns.map { $0.rawValue },
+            keyColumn: keyColumn?.rawValue)
     }
 
     /// 변경이 잦아도 0.8초 뒤 한 번만 저장 (디바운스).
@@ -4531,6 +4646,8 @@ struct ContentView: View {
         matchColumn = s.matchColumn.flatMap(col)
         templateName = s.templateName
         templateColumns = (s.templateColumns ?? []).compactMap(col)
+        keyColumn = s.keyColumn.flatMap(col)
+        keyColumnChosen = s.keyColumn != nil
         indexBase()
         refreshMatches()
         patch = nil
@@ -6851,6 +6968,14 @@ struct PreviewWindowView: View {
     }
     @State private var editing: EditTarget?
     @State private var editText = ""
+    /// 컬럼 폭 — 머리글 오른쪽 끝을 잡고 끌어서 바꾼다.
+    @State private var columnWidths: [String: CGFloat] = [:]
+    @State private var widthDrag: (column: String, start: CGFloat)?
+    private static let defaultColumnWidth: CGFloat = 190
+
+    private func width(_ c: UnifiedColumn) -> CGFloat {
+        columnWidths[c.rawValue] ?? Self.defaultColumnWidth
+    }
 
     /// 파일 색·컬럼 상태 색을 켤지 (기본 켬, 설정에 기억).
     @AppStorage("previewShowColors.v2") private var showColors = true
@@ -7025,7 +7150,7 @@ struct PreviewWindowView: View {
             .fontWeight(improved ? .medium : .regular)
             .foregroundStyle(fg)
             .lineLimit(1).truncationMode(.tail)
-            .frame(width: 190, alignment: .leading)
+            .frame(width: width(c), alignment: .leading)
             .padding(.horizontal, 8).padding(.vertical, 4)
             .background(showColors ? model.cellTint(c, improved: improved) : .clear)
             .background(picked ? Color.accentColor.opacity(0.07) : .clear)
@@ -7174,7 +7299,7 @@ struct PreviewWindowView: View {
                     .foregroundStyle(showColors ? st.tint : .secondary)
                 Text(c.rawValue)
                     .font(.body.weight(.semibold))
-                    .foregroundStyle(showColors && split ? Color.orange : .primary)
+                    .foregroundStyle(.primary)
                     .lineLimit(1).truncationMode(.tail)
                 if let badge = st.badge {
                     Text(badge)
@@ -7191,14 +7316,14 @@ struct PreviewWindowView: View {
                     .padding(.leading, 20)
             } else if model.emptyColumns.contains(c) {
                 Text("비어 있음 — 채울 칸을 골라 주세요")
-                    .font(.body).foregroundStyle(.orange)
+                    .font(.body).foregroundStyle(.secondary)
                     .lineLimit(1).truncationMode(.tail)
                     .padding(.leading, 20)
             } else if let hint = model.pairHints[c] {
                 HStack(spacing: 4) {
                     ownerDots(c)
                     Text(hint)
-                        .font(.body).foregroundStyle(split ? .orange : .secondary)
+                        .font(.body).foregroundStyle(.secondary)
                         .lineLimit(1).truncationMode(.tail)
                 }
                 .padding(.leading, 20)
@@ -7211,10 +7336,16 @@ struct PreviewWindowView: View {
                 .padding(.leading, 20)
             }
         }
-        .frame(width: 190, height: 42, alignment: .leading)
+        .frame(width: width(c), height: 42, alignment: .leading)
         .padding(.horizontal, 8).padding(.vertical, 6)
         .overlay(alignment: .top) {
             if picked { Rectangle().fill(Color.accentColor).frame(height: 3) }
+        }
+        // 오른쪽 끝을 잡고 끌면 폭이 바뀐다.
+        .overlay(alignment: .trailing) { widthHandle(c) }
+        .contextMenu {
+            Button("이 컬럼 폭 기본으로") { columnWidths[c.rawValue] = nil }
+            Button("모든 컬럼 폭 기본으로") { columnWidths = [:] }
         }
         // 머리글도 아래 셀들과 같은 색 계열로 — 열 전체가 한 덩어리로 읽히게.
         .background(showColors ? headerTint(c, st) : Color.clear)
@@ -7270,6 +7401,30 @@ struct PreviewWindowView: View {
         let two = model.columns.filter { model.selection.contains($0) }
         guard two.count == 2 else { return }
         model.request = .merge(two[0], two[1])
+    }
+
+    /// 컬럼 폭 조절 손잡이 — 머리글 오른쪽 끝 4px.
+    private func widthHandle(_ c: UnifiedColumn) -> some View {
+        Rectangle()
+            .fill(Color.primary.opacity(widthDrag?.column == c.rawValue ? 0.25 : 0.08))
+            .frame(width: 4)
+            .contentShape(Rectangle().inset(by: -4))
+            .onHover { inside in
+                if inside { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+            }
+            .gesture(
+                DragGesture(minimumDistance: 1)
+                    .onChanged { v in
+                        if widthDrag?.column != c.rawValue {
+                            widthDrag = (c.rawValue, width(c))
+                        }
+                        if let d = widthDrag {
+                            columnWidths[c.rawValue] = min(700, max(90, d.start + v.translation.width))
+                        }
+                    }
+                    .onEnded { _ in widthDrag = nil }
+            )
+            .help("끌어서 폭 바꾸기 — 오른쪽 클릭하면 기본으로 되돌립니다.")
     }
 
     /// 머리글 배경 — 상태색이 먼저, 그다음 ‘어느 파일에서 온 열인지’ 색.
