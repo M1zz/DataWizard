@@ -153,6 +153,23 @@ struct ContentView: View {
     /// 미리보기 계산 순번 — 늦게 끝난 옛 계산이 새 결과를 덮지 않게.
     @State private var previewToken = 0
 
+    /// 화면을 그릴 때마다 데이터를 다시 훑지 않도록 미리 계산해 둔 것들.
+    /// (글자 하나 칠 때마다 632행 × 116컬럼을 몇 번씩 훑고 있었다.)
+    struct WorkCache {
+        var keyCandidates: [UnifiedColumn] = []
+        var identityColumns: [UnifiedColumn] = []
+        var filterCandidates: [UnifiedColumn] = []
+        var filterCounts: [UnifiedColumn: [(value: String, count: Int)]] = [:]
+        var status: [UnifiedColumn: (text: String, warn: Bool, badge: String)] = [:]
+        var todo: [UnifiedColumn] = []
+        var settled: [UnifiedColumn] = []
+        var empty: [UnifiedColumn] = []
+        var needClean: [(column: UnifiedColumn, note: String)] = []
+        var proposalOrder: [UnifiedColumn] = []
+        var autoEditable: [UnifiedColumn] = []
+    }
+    @State private var cache = WorkCache()
+
     var body: some View {
         stagedContent
             .modifier(SessionAutosave(save: { scheduleSave() },
@@ -506,17 +523,7 @@ struct ContentView: View {
     // MARK: 하나씩 제안하기
 
     /// 손볼 거리가 있는 컬럼을 **일이 적은 순서**로. 금방 끝나는 것부터 하나씩 권한다.
-    private var proposalOrder: [UnifiedColumn] {
-        let scored: [(col: UnifiedColumn, work: Int)] = finalColumns.compactMap { col in
-            guard let r = reviewFor(col), r.kind != .derived else { return nil }
-            let gap = templateGap(r)
-            let work = openCount(r) + gap.outside + (gap.isNew ? 1 : 0)
-            return work > 0 ? (col, work) : nil
-        }
-        return scored.enumerated()
-            .sorted { ($0.element.work, $0.offset) < ($1.element.work, $1.offset) }
-            .map { $0.element.col }
-    }
+    private var proposalOrder: [UnifiedColumn] { cache.proposalOrder }
 
     /// 아직 손봐야 하는 값들 — `openCount`와 같은 기준, 값 자체가 필요할 때.
     private func openValues(_ review: ColumnReview) -> Set<String> {
@@ -770,30 +777,13 @@ struct ContentView: View {
     }
 
     /// 손댈 게 없어 이번에 고르지 않아도 결과에 그대로 완성되는 컬럼들.
-    private var settledColumns: [UnifiedColumn] {
-        finalColumns.filter { col in
-            guard let r = reviewFor(col), r.kind != .derived else { return false }
-            return !focusStatus(col).warn && !focusColumns.contains(col)
-        }
-    }
+    private var settledColumns: [UnifiedColumn] { cache.settled }
 
     /// 그중 사람 판단 없이 값을 다듬을 수 있는 컬럼 — 이미 정해진 통일 규칙이 있는 것들.
-    private var autoEditableColumns: [UnifiedColumn] {
-        settledColumns.filter { col in
-            (valueMap[col] ?? [:]).contains { $0.key != $0.value }
-        }
-    }
+    private var autoEditableColumns: [UnifiedColumn] { cache.autoEditable }
 
     /// 값을 정리해야 하는 컬럼들 — 미정리 값이 남았거나 파일마다 모양이 다른 컬럼.
-    private var columnsNeedingClean: [(column: UnifiedColumn, note: String)] {
-        finalColumns.compactMap { col in
-            guard let r = reviewFor(col), r.kind != .derived else { return nil }
-            let open = openCount(r)
-            if open > 0 { return (col, "\(open)종") }
-            if shapeConflicts.contains(col) { return (col, "파일마다 모양 다름") }
-            return nil
-        }
-    }
+    private var columnsNeedingClean: [(column: UnifiedColumn, note: String)] { cache.needClean }
 
     /// 지금 무엇이 남았는지 한 카드로 — 채울 것 / 정리할 것 / 이미 끝난 것.
     @ViewBuilder
@@ -1185,11 +1175,7 @@ struct ContentView: View {
     /// 손볼 거리가 남은 컬럼 / 이미 정리된 컬럼으로 한 번에 가른다.
     /// (focusStatus 는 컬럼마다 값을 훑으므로 목록마다 다시 계산하지 않는다.)
     private var workColumnSplit: (todo: [UnifiedColumn], settled: [UnifiedColumn]) {
-        var todo: [UnifiedColumn] = [], settled: [UnifiedColumn] = []
-        for col in finalColumns {
-            if focusStatus(col).warn { todo.append(col) } else { settled.append(col) }
-        }
-        return (todo, settled)
+        (cache.todo, cache.settled)
     }
 
     /// 컬럼 목록 — 손볼 거리가 있는 것만 펼쳐 두고, 이미 정리된 컬럼은 접어 둔다.
@@ -1347,16 +1333,27 @@ struct ContentView: View {
 
     private var previewCardHeader: some View {
         let sample = previewSampleRows()
+        let all = preview.columns.isEmpty ? finalColumns : preview.columns
+        let hidden = max(0, all.count - Self.inlinePreviewColumnLimit)
         return HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text("완성본 미리보기").font(.headline)
-            Text("지금 상태로 만들어진 결과입니다 — 전체 \(preview.rows.count)행 중 \(sample.count)줄")
+            Text("지금 상태로 만들어진 결과입니다 — 전체 \(preview.rows.count)행 중 \(sample.count)줄"
+                 + (hidden > 0 ? " · 앞 \(Self.inlinePreviewColumnLimit)컬럼" : ""))
                 .font(.body).foregroundStyle(.secondary)
             Spacer()
+            if hidden > 0 {
+                Button("나머지 \(hidden)컬럼 보기") { openPreviewWindow() }
+                    .controlSize(.small)
+            }
         }
     }
 
+    /// 첫 화면 카드는 요약이라 앞쪽 컬럼만 그린다 — 113컬럼을 다 그리면 화면이 무거워진다.
+    private static let inlinePreviewColumnLimit = 12
+
     private var previewTable: some View {
-        let cols: [UnifiedColumn] = preview.columns.isEmpty ? finalColumns : preview.columns
+        let all: [UnifiedColumn] = preview.columns.isEmpty ? finalColumns : preview.columns
+        let cols: [UnifiedColumn] = Array(all.prefix(Self.inlinePreviewColumnLimit))
         let sample: [Int] = previewSampleRows()
         let border: Color = Color.primary.opacity(0.08)
         return ScrollView([.horizontal, .vertical]) {
@@ -1564,12 +1561,7 @@ struct ContentView: View {
     }
 
     /// 지금 결과에서 값이 하나도 없는 컬럼 — 틀에만 있거나, 파일에 값이 안 들어온 컬럼.
-    private var emptyColumns: [UnifiedColumn] {
-        finalColumns.filter { col in
-            guard filesHaving(col) > 0 else { return true }   // 어떤 파일도 이 컬럼을 안 채움
-            return (reviewFor(col)?.total ?? 0) == 0          // 채우긴 하는데 값이 다 비었음
-        }
-    }
+    private var emptyColumns: [UnifiedColumn] { cache.empty }
 
     /// 빈 컬럼에 짝이 될 만한 후보가 있으면 (자동으로 잇기엔 확신이 모자란 것들).
     private func emptyColumnHint(_ col: UnifiedColumn) -> (source: UnifiedColumn, percent: Int)? {
@@ -2128,6 +2120,8 @@ struct ContentView: View {
         finalColumns = ColumnReviewBuilder.plainColumns(in: plans)
         reviews = ColumnReviewBuilder.plainReviews(in: plans)
         seedValueMap(from: reviews)
+        rebuildRowCache()
+        verifyRowCount("컬럼을 합친")
         if !baseIsUserFile {
             base = BaseSheet.stacked(plans, name: stackedName(plans),
                                      template: templateColumns, key: keyColumn,
@@ -2972,24 +2966,7 @@ struct ContentView: View {
 
     /// 컬럼 한 줄에 붙는 상태 문구 — 값 종 수와 남은 결정 건수, 그리고 틀과의 어긋남.
     private func focusStatus(_ col: UnifiedColumn) -> (text: String, warn: Bool, badge: String) {
-        guard let r = reviewFor(col) else { return ("데이터 있음", false, "") }
-        if r.kind == .derived { return ("자동 생성 컬럼 — 합칠 때 새로 계산됩니다", false, "") }
-        let open = openCount(r)
-        let gap = templateGap(r)
-        let head = "\(r.total)행 · \(r.distinctCount)종"
-        if open > 0 { return ("\(head) · 미정리 \(open)종", true, "손볼 거리 있음") }
-        if r.total == 0 {
-            return ("아직 비어 있음 — 채울 칸을 골라 주거나 그대로 두면 빈칸으로 남습니다",
-                    true, "비어 있음")
-        }
-        if gap.isNew {
-            return ("\(head) · 틀에 없는 컬럼 — 결과 파일 맨 뒤에 새로 생깁니다", true, "틀에 없는 컬럼")
-        }
-        if gap.outside > 0 {
-            return ("\(head) · 틀에 없는 값 \(gap.outside)종 (틀은 \(gap.known)종)", true, "틀과 다름")
-        }
-        if gap.known > 0 { return ("\(head) · 틀에 있는 값과 맞음", false, "") }
-        return (isDecisionRelevant(r) ? "\(head) · 정리됨" : head, false, "")
+        cache.status[col] ?? computeFocusStatus(col)
     }
 
     /// 기존 통합본에 이번에 고른 컬럼만 덮어쓰는 흐름의 컬럼 선택 화면.
@@ -4384,6 +4361,7 @@ struct ContentView: View {
         finalColumns = (!baseIsUserFile ? base?.columns : nil)
             ?? ColumnReviewBuilder.plainColumns(in: built)
         reviews = ColumnReviewBuilder.plainReviews(in: built)
+        rebuildRowCache()
         checked = []
         valueMap = [:]
         allowedValues = [:]
@@ -4600,6 +4578,8 @@ struct ContentView: View {
         finalColumns = base?.columns ?? ColumnReviewBuilder.plainColumns(in: plans)
         reviews = ColumnReviewBuilder.plainReviews(in: plans)
         seedValueMap(from: reviews)
+        rebuildRowCache()
+        verifyRowCount("컬럼·행 구성을 바꾼")
         focusColumns = focusColumns.intersection(Set(finalColumns))
         includedColumns = focusColumns
         proposalIndex = 0
@@ -4778,6 +4758,157 @@ struct ContentView: View {
         }
     }
 
+    // MARK: - 미리 계산해 두기 (버벅임 방지)
+
+    /// 파일 구성이 바뀔 때만 다시 계산하면 되는 것들 — 행을 전부 훑는 무거운 계산.
+    private func rebuildRowCache() {
+        var c = cache
+        c.keyCandidates = computeKeyCandidates()
+        c.identityColumns = computeIdentityColumns(from: c.keyCandidates)
+        c.filterCandidates = []
+        c.filterCounts = [:]
+        for col in finalColumns where plans.contains(where: { $0.isMapped(col) }) {
+            let counts = computeFilterValueCounts(col)
+            if counts.count >= 2 && counts.count <= 12 {
+                c.filterCandidates.append(col)
+                c.filterCounts[col] = counts
+            }
+        }
+        if let col = filterColumn, c.filterCounts[col] == nil {
+            c.filterCounts[col] = computeFilterValueCounts(col)
+        }
+        cache = c
+        rebuildStatusCache()
+    }
+
+    /// 값 정리 상태가 바뀔 때 다시 계산하는 것들 — 컬럼마다의 상태·남은 일.
+    private func rebuildStatusCache() {
+        var c = cache
+        var status: [UnifiedColumn: (text: String, warn: Bool, badge: String)] = [:]
+        var todo: [UnifiedColumn] = [], settled: [UnifiedColumn] = []
+        var empty: [UnifiedColumn] = [], needClean: [(column: UnifiedColumn, note: String)] = []
+        var scored: [(col: UnifiedColumn, work: Int)] = []
+
+        for col in finalColumns {
+            let st = computeFocusStatus(col)
+            status[col] = st
+            if st.warn { todo.append(col) } else { settled.append(col) }
+
+            guard let r = reviewFor(col) else {
+                empty.append(col)
+                continue
+            }
+            if filesHaving(col) == 0 || r.total == 0 { empty.append(col) }
+            if r.kind != .derived {
+                let open = openCount(r)
+                if open > 0 { needClean.append((col, "\(open)종")) }
+                else if shapeConflicts.contains(col) { needClean.append((col, "파일마다 모양 다름")) }
+                let gap = templateGap(r)
+                let work = open + gap.outside + (gap.isNew ? 1 : 0)
+                if work > 0 { scored.append((col, work)) }
+            }
+        }
+        c.status = status
+        c.todo = todo
+        c.settled = settled.filter { !focusColumns.contains($0) }
+        c.empty = empty
+        c.needClean = needClean
+        c.proposalOrder = scored.enumerated()
+            .sorted { ($0.element.work, $0.offset) < ($1.element.work, $1.offset) }
+            .map { $0.element.col }
+        c.autoEditable = c.settled.filter { col in
+            (valueMap[col] ?? [:]).contains { $0.key != $0.value }
+        }
+        cache = c
+    }
+
+    /// 키로 삼을 만한 컬럼 — 값이 (거의) 행마다 고유하고 잘 채워진 컬럼.
+    private func computeKeyCandidates() -> [UnifiedColumn] {
+        finalColumns.filter { col in
+            guard plans.contains(where: { $0.isMapped(col) }) else { return false }
+            var seen = Set<String>()
+            var filled = 0, dup = 0, total = 0
+            for plan in plans where plan.isMapped(col) {
+                for row in plan.rows {
+                    total += 1
+                    let v = plan.compose(col, from: row).trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !v.isEmpty else { continue }
+                    filled += 1
+                    if !seen.insert(v.lowercased()).inserted { dup += 1 }
+                }
+            }
+            guard total > 0, filled * 2 >= total else { return false }
+            return dup * 10 <= filled
+        }
+    }
+
+    /// 키가 없을 때 ‘같은 사람인가’를 가릴 컬럼 — 이메일·전화처럼 생긴 값.
+    private func computeIdentityColumns(from candidates: [UnifiedColumn]) -> [UnifiedColumn] {
+        func looksLikeContact(_ col: UnifiedColumn) -> Bool {
+            var checked = 0, hits = 0
+            for plan in plans where plan.isMapped(col) {
+                for row in plan.rows.prefix(60) {
+                    let v = plan.compose(col, from: row)
+                    guard !v.isEmpty else { continue }
+                    checked += 1
+                    if v.contains("@") || v.filter(\.isNumber).count >= 9 { hits += 1 }
+                }
+            }
+            return checked > 0 && hits * 2 >= checked
+        }
+        return Array(candidates.filter { $0 != keyColumn }.filter(looksLikeContact).prefix(2))
+    }
+
+    /// 컬럼의 값별 행 수 (빈 값은 `(빈 칸)`).
+    private func computeFilterValueCounts(_ col: UnifiedColumn) -> [(value: String, count: Int)] {
+        var counts: [String: Int] = [:]
+        for plan in plans where plan.isMapped(col) {
+            for row in plan.rows {
+                let v = plan.compose(col, from: row).trimmingCharacters(in: .whitespacesAndNewlines)
+                counts[v.isEmpty ? "(빈 칸)" : v, default: 0] += 1
+            }
+        }
+        return counts.sorted { $0.value > $1.value }.map { (value: $0.key, count: $0.value) }
+    }
+
+    /// 컬럼 한 줄에 붙는 상태 문구 — 값 종 수와 남은 결정, 그리고 틀과의 어긋남.
+    private func computeFocusStatus(_ col: UnifiedColumn) -> (text: String, warn: Bool, badge: String) {
+        guard let r = reviewFor(col) else { return ("데이터 있음", false, "") }
+        if r.kind == .derived { return ("자동 생성 컬럼 — 합칠 때 새로 계산됩니다", false, "") }
+        let open = openCount(r)
+        let gap = templateGap(r)
+        let head = "\(r.total)행 · \(r.distinctCount)종"
+        if open > 0 { return ("\(head) · 미정리 \(open)종", true, "손볼 거리 있음") }
+        if r.total == 0 {
+            return ("아직 비어 있음 — 채울 칸을 골라 주거나 그대로 두면 빈칸으로 남습니다",
+                    true, "비어 있음")
+        }
+        if gap.isNew {
+            return ("\(head) · 틀에 없는 컬럼 — 결과 파일 맨 뒤에 새로 생깁니다", true, "틀에 없는 컬럼")
+        }
+        if gap.outside > 0 {
+            return ("\(head) · 틀에 없는 값 \(gap.outside)종 (틀은 \(gap.known)종)", true, "틀과 다름")
+        }
+        if gap.known > 0 { return ("\(head) · 틀에 있는 값과 맞음", false, "") }
+        return (isDecisionRelevant(r) ? "\(head) · 정리됨" : head, false, "")
+    }
+
+    /// 컬럼을 합치거나 행을 걸러 낸 뒤 **행 수가 맞는지** 확인한다.
+    /// 데이터가 빠지거나 늘어나면 그 자리에서 알려 준다.
+    private func verifyRowCount(_ what: String) {
+        let excluded = deletedSourceIDs.union(filteredOutSourceIDs)
+        var expected = 0
+        for (i, plan) in plans.enumerated() {
+            for r in plan.rows.indices where !excluded.contains("\(i)#\(r)") { expected += 1 }
+        }
+        let actual = base?.rows.count ?? expected
+        if actual != expected {
+            errorMessage = "\(what) 뒤 행 수가 달라졌어요 — 예상 \(expected)행, 실제 \(actual)행."
+        } else if errorMessage?.contains("행 수가 달라졌어요") == true {
+            errorMessage = nil
+        }
+    }
+
     /// 미리보기를 다시 만든다 — **무거운 계산은 백그라운드에서**.
     /// 메인 스레드를 붙잡지 않아야 마우스가 무지개로 돌지 않는다.
     private func refreshPreview() {
@@ -4793,6 +4924,7 @@ struct ContentView: View {
             let open = openCount(r)
             if open > 0 { opens[r.column] = open }
         }
+        rebuildStatusCache()
         preview.checked = checked
         preview.openCounts = opens
         preview.decisionColumns = relevant
@@ -4828,42 +4960,10 @@ struct ContentView: View {
     }
 
     /// 키로 삼을 만한 컬럼들 — 값이 (거의) 행마다 고유하고 잘 채워진 컬럼.
-    private var keyCandidates: [UnifiedColumn] {
-        finalColumns.filter { col in
-            guard plans.contains(where: { $0.isMapped(col) }) else { return false }
-            var seen = Set<String>()
-            var filled = 0, dup = 0, total = 0
-            for plan in plans where plan.isMapped(col) {
-                for row in plan.rows {
-                    total += 1
-                    let v = plan.compose(col, from: row).trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !v.isEmpty else { continue }
-                    filled += 1
-                    if !seen.insert(v.lowercased()).inserted { dup += 1 }
-                }
-            }
-            guard total > 0, filled * 2 >= total else { return false }   // 절반 이상 채워져 있고
-            return dup * 10 <= filled                                    // 겹치는 값이 10% 이하
-        }
-    }
+    private var keyCandidates: [UnifiedColumn] { cache.keyCandidates }
 
     /// 키가 없을 때 ‘같은 사람인가’를 가릴 컬럼들 — 이메일·전화처럼 생긴 값 우선.
-    private var identityColumns: [UnifiedColumn] {
-        let candidates = keyCandidates.filter { $0 != keyColumn }
-        func looksLikeContact(_ col: UnifiedColumn) -> Bool {
-            var checked = 0, hits = 0
-            for plan in plans where plan.isMapped(col) {
-                for row in plan.rows.prefix(60) {
-                    let v = plan.compose(col, from: row)
-                    guard !v.isEmpty else { continue }
-                    checked += 1
-                    if v.contains("@") || v.filter(\.isNumber).count >= 9 { hits += 1 }
-                }
-            }
-            return checked > 0 && hits * 2 >= checked
-        }
-        return Array(candidates.filter(looksLikeContact).prefix(2))
-    }
+    private var identityColumns: [UnifiedColumn] { cache.identityColumns }
 
     /// 키를 자동으로 골라 준다 — Code·사번처럼 사람을 가리키는 컬럼 먼저.
     private func autoKeyColumn() -> UnifiedColumn? {
@@ -4913,24 +5013,11 @@ struct ContentView: View {
 
 
     /// 행을 걸러 낼 만한 컬럼 — 값이 몇 종류뿐인 ‘상태’ 같은 컬럼.
-    private var filterCandidates: [UnifiedColumn] {
-        finalColumns.filter { col in
-            guard plans.contains(where: { $0.isMapped(col) }) else { return false }
-            let counts = filterValueCounts(col)
-            return counts.count >= 2 && counts.count <= 12
-        }
-    }
+    private var filterCandidates: [UnifiedColumn] { cache.filterCandidates }
 
     /// 그 컬럼의 값별 행 수 (빈 값은 `(빈 칸)`으로).
     private func filterValueCounts(_ col: UnifiedColumn) -> [(value: String, count: Int)] {
-        var counts: [String: Int] = [:]
-        for plan in plans where plan.isMapped(col) {
-            for row in plan.rows {
-                let v = plan.compose(col, from: row).trimmingCharacters(in: .whitespacesAndNewlines)
-                counts[v.isEmpty ? "(빈 칸)" : v, default: 0] += 1
-            }
-        }
-        return counts.sorted { $0.value > $1.value }.map { (value: $0.key, count: $0.value) }
+        cache.filterCounts[col] ?? computeFilterValueCounts(col)
     }
 
     /// 지금 필터로 빠지는 행들 (`파일#줄`). 지운 게 아니라 ‘잠깐 빼 둔’ 것.

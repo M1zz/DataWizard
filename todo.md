@@ -867,3 +867,18 @@
       · 빼는 행은 **지우는 게 아니라 감추는 것** — `되돌리기`/`거르지 않기`로 복구, 세션 저장
       · 행 수 대조표에 `‘Process Status’로 빼 둔 행 296행 [되돌리기]`
 - 검증: 전체 632행 → `Submitted`만 남기면 **336행** (일반지원 111 + private 44 + Public 181)
+
+## 버벅임 원인 분석과 해결
+증상: 키 값을 고르거나 ‘첫 번호’를 타이핑하면 글자마다 앱이 멈칫.
+- 원인: **화면을 다시 그릴 때마다 데이터를 통째로 훑고 있었다.**
+  글자 하나 칠 때마다 `keyCandidates`(113컬럼 × 632행) · `identityColumns` ·
+  `filterCandidates`+값 집계(113 × 632) · `focusStatus`(컬럼마다 `openCount`·`templateGap`) ·
+  `workColumnSplit` · `emptyColumns` · `columnsNeedingClean` · `proposalOrder` 가 전부 다시 계산됐다
+  (측정: 키 후보 0.04s + 필터 후보 0.04s — 여기에 컬럼별 상태 계산과 SwiftUI 재구성이 더해짐)
+- [x] `WorkCache` 도입 — 위 계산을 **미리 해 두고 화면은 읽기만** 한다
+      · `rebuildRowCache()` 파일 구성이 바뀔 때 (행을 훑는 무거운 것들)
+      · `rebuildStatusCache()` 값 정리 상태가 바뀔 때 (컬럼별 상태·남은 일)
+- [x] 첫 화면 미리보기 카드는 **앞 12컬럼만** 그린다 (113컬럼 × 9행 ≈ 1000칸을 매번 그리고 있었음)
+      `나머지 101컬럼 보기` 버튼으로 큰 창 열기
+- [x] 컬럼을 합치거나 행을 거른 뒤 **행 수 검사**(`verifyRowCount`) — 예상과 다르면 그 자리에서 알림
+- 참고: 앱을 Debug로 돌리면 Swift가 최적화 없이 도는 만큼 더 느립니다. Release로 실행하면 확실히 빨라져요.
