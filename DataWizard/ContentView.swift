@@ -900,37 +900,66 @@ struct ContentView: View {
         }
     }
 
-    /// 여러 컬럼을 한 칸으로 합치기 전 확인 — 무엇이 어디로 가는지 보여 준다.
+    /// 여러 칸을 한 칸으로 합치기 — 어디에·어떤 순서로·무엇을 사이에 넣을지 정한다.
     @ViewBuilder
     private var mergeConfirmSheet: some View {
         if let cols = confirmMerge, cols.count >= 2 {
-            let target = cols[0]
-            let sources = Array(cols.dropFirst())
-            VStack(alignment: .leading, spacing: 12) {
-                Text("한 칸으로 합치기").font(.title2.weight(.bold))
-                Text(sources.map(\.rawValue).joined(separator: " · ") + " → ‘\(target.rawValue)’")
-                    .font(.body.weight(.semibold))
-                    .fixedSize(horizontal: false, vertical: true)
-                Text("앞에 있는 ‘\(target.rawValue)’ 이름이 남고, 나머지 칸의 값이 그 자리로 들어갑니다. "
-                     + "한 파일에 둘 다 값이 있으면 공백으로 이어 붙여요 (성 + 이름처럼).")
-                    .font(.body).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                HStack {
-                    Spacer()
-                    Button("취소") { confirmMerge = nil }
-                    Button("합치기") {
-                        let pairs = sources.map { (source: $0, target: target) }
-                        confirmMerge = nil
-                        focusColumns = [target]
-                        withBusy("컬럼을 합치는 중…") { applyMatches(pairs) }
+            ColumnMergeSetupSheet(
+                columns: cols,
+                templateColumns: Set(templateColumns),
+                sample: { col in
+                    for plan in plans where plan.isMapped(col) {
+                        for row in plan.rows.prefix(50) {
+                            let v = plan.compose(col, from: row)
+                            if !v.isEmpty { return [v] }
+                        }
                     }
-                    .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.borderedProminent)
-                }
-            }
-            .padding(20)
-            .frame(minWidth: 460)
+                    return []
+                },
+                onApply: { target, order, separator in
+                    confirmMerge = nil
+                    focusColumns = [target]
+                    withBusy("칸을 합치는 중…") {
+                        applyColumnMerge(target: target, order: order, separator: separator)
+                    }
+                },
+                onClose: { confirmMerge = nil })
         }
+    }
+
+    /// 고른 칸들을 한 칸으로 — 값은 정한 순서대로, 정한 구분자로 이어 붙는다.
+    /// (행은 건드리지 않는다. 어느 칸의 값을 어떻게 읽을지만 바꾼다.)
+    private func applyColumnMerge(target: UnifiedColumn,
+                                  order: [UnifiedColumn],
+                                  separator: String) {
+        for i in plans.indices {
+            var sources: [String] = []
+            for col in order {
+                if let hs = plans[i].sources[col] { sources += hs }
+            }
+            guard !sources.isEmpty else { continue }
+            plans[i].sources[target] = sources
+            plans[i].separators[target] = separator
+            if !plans[i].headers.contains(target.rawValue) {
+                plans[i].headers.append(target.rawValue)
+            }
+            for col in order where col != target {
+                plans[i].sources[col] = nil
+                plans[i].separators[col] = nil
+                plans[i].headers.removeAll { $0 == col.rawValue }
+            }
+        }
+        // 이미 해 둔 값 정리도 새 칸으로 옮겨 둔다.
+        for col in order where col != target {
+            if let m = valueMap.removeValue(forKey: col) {
+                valueMap[target] = (valueMap[target] ?? [:]).merging(m) { a, _ in a }
+            }
+            typeOverride[col] = nil
+            formatChoice[col] = nil
+            customFormat[col] = nil
+        }
+        rebuildWorkColumns()
+        scheduleSave()
     }
 
     /// 컬럼을 눌러 고르는 판 — 하나 고르면 정리하러 가고, 여럿 고르면 함께 정리하거나 합친다.
@@ -994,20 +1023,33 @@ struct ContentView: View {
                 Button {
                     confirmMerge = picked
                 } label: {
-                    Label("한 칸으로 합치기", systemImage: "arrow.trianglehead.merge")
+                    Label("한 칸으로 합치기…", systemImage: "arrow.trianglehead.merge")
                 }
-                .help("고른 컬럼을 하나로 합칩니다. 앞에 있는 ‘\(picked[0].rawValue)’ 이름이 남아요.")
+                .help("어느 칸에·어떤 순서로·무엇을 사이에 넣어 합칠지 정할 수 있어요.")
             }
             if picked.count == 1, emptyColumns.contains(picked[0]) {
                 Button("채울 칸 고르기…") { configColumn = picked[0] }
             }
-            Button {
-                withBusy("검토 화면을 만드는 중…") { startWork() }
-            } label: {
-                Text(picked.count == 1 ? "이 컬럼 정리하기 →" : "\(picked.count)개 정리하기 →")
-                    .fontWeight(.semibold)
+            if picked.count == 1 {
+                Button {
+                    withBusy("검토 화면을 만드는 중…") { startWork() }
+                } label: {
+                    Text("이 컬럼 정리하기 →").fontWeight(.semibold)
+                }
+                .buttonStyle(.borderedProminent)
+            } else {
+                Menu {
+                    Button("한 칸으로 합치기…") { confirmMerge = picked }
+                    Button("따로따로 정리하기 →") {
+                        withBusy("검토 화면을 만드는 중…") { startWork() }
+                    }
+                } label: {
+                    Text("\(picked.count)개 정리하기 ▾").fontWeight(.semibold)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("여러 칸을 하나로 합칠지, 각각 따로 정리할지 고르세요.")
             }
-            .buttonStyle(.borderedProminent)
             Button("해제") { focusColumns = [] }
                 .controlSize(.small)
         }
@@ -4579,7 +4621,8 @@ struct ContentView: View {
         case .merge(let a, let b):
             preview.selection = []
             bringMainWindowToFront()
-            withBusy("두 컬럼을 합치는 중…") { mergeTwoColumns(a, b) }
+            // 바로 합치지 않고 ‘어떻게 합칠지’부터 물어본다.
+            confirmMerge = finalColumns.filter { $0 == a || $0 == b }
         case .edit(let col, let before, let after):
             withBusy("값을 바꾸는 중…") { editValue(col, from: before, to: after) }
         case .confirmRow(let key, let on):
@@ -4603,15 +4646,6 @@ struct ContentView: View {
         scheduleSave()
     }
 
-    /// 고른 두 컬럼을 한 칸으로. 앞(왼쪽)에 있는 컬럼 이름이 남는다.
-    private func mergeTwoColumns(_ a: UnifiedColumn, _ b: UnifiedColumn) {
-        guard a != b,
-              let ia = finalColumns.firstIndex(of: a),
-              let ib = finalColumns.firstIndex(of: b) else { return }
-        let target = ia < ib ? a : b
-        let source = ia < ib ? b : a
-        applyMatches([(source: source, target: target)])
-    }
 
     /// 미리보기 창에서 시작한 작업이라 메인 창을 앞으로 가져온다.
     private func bringMainWindowToFront() {
@@ -4798,6 +4832,9 @@ struct ContentView: View {
         preview.pairHints = hints
         preview.columnOwners = owners
         preview.emptyColumns = Set(emptyColumns)
+        preview.usingTemplate = !templateColumns.isEmpty
+        preview.extraColumns = templateColumns.isEmpty ? []
+            : Set(finalColumns.filter { !templateColumns.contains($0) })
         // 컬럼을 고르는 중이면 지금 제안하는 컬럼을 강조해 둔다.
         if stage == .work, openColumn == nil { preview.focused = currentProposalColumn }
     }
@@ -7115,6 +7152,10 @@ final class PreviewModel: ObservableObject {
     @Published var columnOwners: [UnifiedColumn: [Int]] = [:]
     /// 값이 하나도 없는 컬럼 — 머리글에 ‘비어 있음’으로 알려 준다.
     @Published var emptyColumns: Set<UnifiedColumn> = []
+    /// 틀에 없는 컬럼 — 결과에는 들어가지만 ‘틀 밖’이라고 알려 준다.
+    @Published var extraColumns: Set<UnifiedColumn> = []
+    /// 틀을 쓰고 있는가 (틀 밖 표시를 켤지).
+    @Published var usingTemplate = false
     // 미리보기 창에서 고른 컬럼과, 메인 창에 보내는 요청.
     @Published var selection: Set<UnifiedColumn> = []
     @Published var request: PreviewRequest?
@@ -7242,9 +7283,9 @@ final class PreviewModel: ObservableObject {
         case .needsWork:            return .orange.opacity(improved ? 0.12 : 0.06)
         case .resolved, .nothingToDo:
             if improved { return .accentColor.opacity(0.10) }
-            // 한 파일에서만 온 컬럼은 그 파일 색으로 — 어디서 온 열인지 배경으로 보이게.
-            if let t = ownerTint(c) { return t.opacity(0.10) }
-            return splitColumns.contains(c) ? .orange.opacity(0.05) : .clear
+            // 틀 밖 컬럼만 옅은 회색으로 — 틀에 있던 칸과 구분되게.
+            if usingTemplate, extraColumns.contains(c) { return .secondary.opacity(0.05) }
+            return .clear
         }
     }
 
@@ -7253,7 +7294,8 @@ final class PreviewModel: ObservableObject {
         columns = []; checked = []
         rowFiles = []; fileNames = []
         splitColumns = []; pairHints = [:]; columnOwners = [:]; baseName = ""; newRows = []
-        emptyColumns = []; rowKeys = []; duplicateRows = []; duplicateOf = [:]
+        emptyColumns = []; extraColumns = []; usingTemplate = false
+        rowKeys = []; duplicateRows = []; duplicateOf = [:]
         showDuplicatesOnly = false
         selection = []; request = nil
         openCounts = [:]; decisionColumns = []
@@ -7594,42 +7636,7 @@ struct PreviewWindowView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ScrollViewReader { proxy in
-                ScrollView([.horizontal, .vertical]) {
-                    LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                        Section {
-                            ForEach(visibleRows, id: \.1.id) { i, row in
-                                HStack(spacing: 0) {
-                                    rowHeadCell(i)
-                                    ForEach(model.columns, id: \.self) { c in
-                                        bodyCell(c, row: row, at: i)
-                                    }
-                                }
-                                .background(model.isConfirmed(i) ? Color.green.opacity(0.10) : .clear)
-                                .background(showColors ? (model.fileTint(row: i)?.opacity(0.14) ?? .clear) : .clear)
-                                Divider()
-                            }
-                        } header: {
-                            HStack(spacing: 0) {
-                                Text(model.rowFiles.isEmpty ? "확정 · 행" : "확정 · 행 · 어느 파일에서 왔나")
-                                    .font(.body.weight(.semibold)).foregroundStyle(.secondary)
-                                    .frame(width: model.rowFiles.isEmpty ? 82 : 215, alignment: .leading)
-                                    .padding(.horizontal, 8).padding(.vertical, 6)
-                                ForEach(Array(model.columns.enumerated()), id: \.element) { idx, c in
-                                    headerCell(c, number: idx + 1)
-                                        .id("col:" + c.rawValue)
-                                }
-                            }
-                            .background(Color(nsColor: .underPageBackgroundColor))
-                        }
-                    }
-                }
-                .onChange(of: jumpColumn) { name in
-                    guard let name else { return }
-                    withAnimation { proxy.scrollTo("col:" + name, anchor: .center) }
-                    jumpColumn = nil
-                }
-                }
+                previewTableView
                 Divider()
                 legendBar
             }
@@ -7816,10 +7823,10 @@ struct PreviewWindowView: View {
 
     /// 컬럼 머리글 한 칸 — 상태 아이콘 + 이름 + 남은 건수, 그리고 상태색 밑줄.
     /// 머리글은 스크롤해도 고정이라 여기 색이 곧 그 컬럼의 상태 표시가 된다.
-    private func headerCell(_ c: UnifiedColumn, number: Int) -> some View {
+    private func headerCell(_ c: UnifiedColumn) -> some View {
         let st = model.status(c)
         let isFocused = model.focused == c
-        let split = model.splitColumns.contains(c)
+        let extra = model.usingTemplate && model.extraColumns.contains(c)
         let picked = model.selection.contains(c)
         return VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 4) {
@@ -7831,10 +7838,6 @@ struct PreviewWindowView: View {
                 }
                 .buttonStyle(.plain)
                 .help("이 컬럼 고르기 — 고른 뒤 ‘데이터 정리하기’나 ‘두 컬럼 합치기’를 누르세요.")
-                Text("\(number)")
-                    .font(.body.monospacedDigit().weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(minWidth: 16, alignment: .trailing)
                 Image(systemName: st.icon)
                     .font(.body)
                     .foregroundStyle(showColors ? st.tint : .secondary)
@@ -7850,7 +7853,7 @@ struct PreviewWindowView: View {
                         .background(Capsule().fill(Color.orange.opacity(0.20)))
                 }
             }
-            // 아직 한 칸으로 안 합쳐진 컬럼 — 인라인 미리보기와 같은 둘째 줄.
+            // 둘째 줄은 ‘지금 보는 중’·‘비어 있음’·‘틀 밖’만 — 어느 파일에서 왔는지는 안 보여 준다.
             if isFocused {
                 Text("지금 볼 컬럼")
                     .font(.body).foregroundStyle(Color.accentColor)
@@ -7860,21 +7863,10 @@ struct PreviewWindowView: View {
                     .font(.body).foregroundStyle(.secondary)
                     .lineLimit(1).truncationMode(.tail)
                     .padding(.leading, 20)
-            } else if let hint = model.pairHints[c] {
-                HStack(spacing: 4) {
-                    ownerDots(c)
-                    Text(hint)
-                        .font(.body).foregroundStyle(.secondary)
-                        .lineLimit(1).truncationMode(.tail)
-                }
-                .padding(.leading, 20)
-            } else if model.fileNames.count > 1, !(model.columnOwners[c] ?? []).isEmpty {
-                HStack(spacing: 4) {
-                    ownerDots(c)
-                    Text("모든 파일에 있음")
-                        .font(.body).foregroundStyle(.secondary)
-                }
-                .padding(.leading, 20)
+            } else if extra {
+                Text("틀 밖 컬럼")
+                    .font(.body).foregroundStyle(.secondary)
+                    .padding(.leading, 20)
             }
         }
         .frame(width: width(c), height: 42, alignment: .leading)
@@ -7904,6 +7896,59 @@ struct PreviewWindowView: View {
         }
         .help("\(c.rawValue) — \(st.help)"
               + (isFocused ? "\n지금 검토 중인 컬럼입니다." : ""))
+    }
+
+    /// 표 본체 — 조각으로 나눠 둔다 (한 덩어리면 타입 체크가 버겁다).
+    private var previewTableView: some View {
+        ScrollViewReader { proxy in
+            ScrollView([.horizontal, .vertical]) {
+                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                    Section {
+                        ForEach(visibleRows, id: \.1.id) { i, row in
+                            tableRow(i, row)
+                        }
+                    } header: {
+                        tableHeader
+                    }
+                }
+            }
+            .onChange(of: jumpColumn) { name in
+                guard let name else { return }
+                withAnimation { proxy.scrollTo("col:" + name, anchor: .center) }
+                jumpColumn = nil
+            }
+        }
+    }
+
+    private func tableRow(_ i: Int, _ row: ApplicantRow) -> some View {
+        let confirmed: Color = model.isConfirmed(i) ? Color.green.opacity(0.10) : Color.clear
+        let file: Color = showColors ? (model.fileTint(row: i)?.opacity(0.14) ?? .clear) : .clear
+        return VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                rowHeadCell(i)
+                ForEach(model.columns, id: \.self) { c in
+                    bodyCell(c, row: row, at: i)
+                }
+            }
+            .background(confirmed)
+            .background(file)
+            Divider()
+        }
+    }
+
+    private var tableHeader: some View {
+        let gutter: CGFloat = model.rowFiles.isEmpty ? 82 : 215
+        let title: String = model.rowFiles.isEmpty ? "확정 · 행" : "확정 · 행 · 어느 파일에서"
+        return HStack(spacing: 0) {
+            Text(title)
+                .font(.body.weight(.semibold)).foregroundStyle(.secondary)
+                .frame(width: gutter, alignment: .leading)
+                .padding(.horizontal, 8).padding(.vertical, 6)
+            ForEach(model.columns, id: \.self) { c in
+                headerCell(c).id("col:" + c.rawValue)
+            }
+        }
+        .background(Color(nsColor: .underPageBackgroundColor))
     }
 
     /// 컬럼을 고르면 나타나는 동작들 — 정리하러 가기 / 두 컬럼 합치기.
@@ -7974,8 +8019,8 @@ struct PreviewWindowView: View {
     private func headerTint(_ c: UnifiedColumn, _ st: ColumnWorkStatus) -> Color {
         if st.needsWork { return .orange.opacity(0.14) }
         if model.checked.contains(c) { return .green.opacity(0.14) }
-        if let t = model.ownerTint(c) { return t.opacity(0.22) }
-        return model.splitColumns.contains(c) ? .orange.opacity(0.08) : .clear
+        if model.usingTemplate, model.extraColumns.contains(c) { return .secondary.opacity(0.10) }
+        return .clear
     }
 
     /// 이 컬럼이 어느 파일에 있는지 점으로 — 있는 파일은 그 색, 없으면 빈 동그라미.

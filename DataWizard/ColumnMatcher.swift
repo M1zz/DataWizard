@@ -356,3 +356,140 @@ struct ColumnMatchSheet: View {
         .padding(16)
     }
 }
+
+// MARK: - 여러 칸을 한 칸으로 합치기 설정
+
+/// 고른 컬럼들을 한 칸으로 합칠 때, **어디에·어떤 순서로·무엇을 사이에 넣어** 합칠지 정한다.
+/// 예: 틀의 `이름` 칸에 `성` + `이름`을 공백으로 이어 붙이기.
+struct ColumnMergeSetupSheet: View {
+    let columns: [UnifiedColumn]
+    let templateColumns: Set<UnifiedColumn>
+    /// 컬럼의 실제 값 몇 개 (미리보기용).
+    let sample: (UnifiedColumn) -> [String]
+    let onApply: (_ target: UnifiedColumn, _ order: [UnifiedColumn], _ separator: String) -> Void
+    let onClose: () -> Void
+
+    @State private var target: UnifiedColumn
+    @State private var order: [UnifiedColumn]
+    @State private var separator: String
+    @State private var custom = ""
+
+    init(columns: [UnifiedColumn],
+         templateColumns: Set<UnifiedColumn>,
+         sample: @escaping (UnifiedColumn) -> [String],
+         onApply: @escaping (UnifiedColumn, [UnifiedColumn], String) -> Void,
+         onClose: @escaping () -> Void) {
+        self.columns = columns
+        self.templateColumns = templateColumns
+        self.sample = sample
+        self.onApply = onApply
+        self.onClose = onClose
+        // 틀 안에 있는 칸이 있으면 그 칸을 받는 자리로 (틀 구성을 지키는 게 목적이니까).
+        let inTemplate = columns.first { templateColumns.contains($0) }
+        _target = State(initialValue: inTemplate ?? columns[0])
+        _order = State(initialValue: columns)
+        _separator = State(initialValue: " ")
+    }
+
+    /// 지금 설정대로 만들어질 값 (실제 값으로 보여 준다).
+    private var previewLine: String {
+        let parts = order.compactMap { sample($0).first }.filter { !$0.isEmpty }
+        guard !parts.isEmpty else { return "—" }
+        return parts.joined(separator: separator)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("여러 칸을 한 칸으로 합치기").font(.title2.weight(.bold))
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("어느 칸에 넣을까요?").font(.body.weight(.semibold))
+                Picker("", selection: $target) {
+                    ForEach(columns) { c in
+                        Text(c.rawValue + (templateColumns.contains(c) ? "  (틀 안)" : "  (틀 밖)"))
+                            .tag(c)
+                    }
+                }
+                .labelsHidden()
+                .frame(maxWidth: 360)
+                Text("고른 칸들의 값이 이 칸으로 들어가고, 나머지 칸은 사라집니다.")
+                    .font(.body).foregroundStyle(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("어떤 순서로 이어 붙일까요?").font(.body.weight(.semibold))
+                ForEach(Array(order.enumerated()), id: \.element) { idx, c in
+                    HStack(spacing: 8) {
+                        Text("\(idx + 1).").font(.body.monospacedDigit()).foregroundStyle(.secondary)
+                        Text(c.rawValue).font(.body)
+                        Text(sample(c).first ?? "—")
+                            .font(.body).foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        Spacer(minLength: 8)
+                        Button {
+                            guard idx > 0 else { return }
+                            order.swapAt(idx, idx - 1)
+                        } label: { Image(systemName: "arrow.up") }
+                            .disabled(idx == 0)
+                        Button {
+                            guard idx < order.count - 1 else { return }
+                            order.swapAt(idx, idx + 1)
+                        } label: { Image(systemName: "arrow.down") }
+                            .disabled(idx == order.count - 1)
+                    }
+                    .padding(.horizontal, 10).padding(.vertical, 6)
+                    .background(RoundedRectangle(cornerRadius: 8)
+                        .fill(Color(nsColor: .controlBackgroundColor)))
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("사이에 무엇을 넣을까요?").font(.body.weight(.semibold))
+                HStack(spacing: 8) {
+                    chip("붙여쓰기", "")
+                    chip("공백", " ")
+                    chip("쉼표", ", ")
+                    chip("하이픈", "-")
+                    TextField("직접", text: $custom)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 90)
+                        .onChange(of: custom) { v in if !v.isEmpty { separator = v } }
+                }
+            }
+
+            HStack(spacing: 8) {
+                Text("이렇게 됩니다").font(.body.weight(.semibold))
+                Text(previewLine)
+                    .font(.body)
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(RoundedRectangle(cornerRadius: 6)
+                        .fill(Color.accentColor.opacity(0.12)))
+            }
+
+            HStack {
+                Spacer()
+                Button("취소") { onClose() }
+                Button("합치기") { onApply(target, order, separator) }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 520)
+    }
+
+    private func chip(_ title: String, _ value: String) -> some View {
+        let on = separator == value && custom.isEmpty
+        return Button {
+            custom = ""
+            separator = value
+        } label: {
+            Text(title)
+                .font(.body)
+                .padding(.horizontal, 10).padding(.vertical, 4)
+                .background(Capsule().fill(on ? Color.accentColor.opacity(0.18)
+                                              : Color.primary.opacity(0.06)))
+        }
+        .buttonStyle(.plain)
+    }
+}
