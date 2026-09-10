@@ -187,10 +187,23 @@ extension BaseSheet {
     /// `key`를 주면 **같은 키를 가진 행을 한 줄로 포갠다** (파일이 달라도 같은 사람이면 한 줄).
     /// 먼저 들어온 값이 이기고, 빈칸만 뒤 파일 값으로 채운다.
     /// 키가 비어 있는 행에는 `AUTO-0001` 같은 번호를 만들어 넣는다 (그 행도 한 줄로 남는다).
+    /// 값 하나를 ‘같은 사람인가’ 비교용으로 다듬는다 — 이메일은 소문자, 전화는 숫자만.
+    static func identityKey(_ value: String) -> String {
+        let t = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !t.isEmpty else { return "" }
+        if t.contains("@") { return "e:" + t }
+        let digits = t.filter(\.isNumber)
+        if digits.count >= 9 { return "p:" + String(digits.suffix(11)) }
+        return "v:" + t
+    }
+
+    /// `identity`는 키가 비었을 때 ‘그래도 같은 사람인지’ 가릴 컬럼들 (이메일·전화 등).
+    /// 덕분에 키가 없는 파일의 행도 새 줄을 만들지 않고 기존 줄에 붙는다.
     static func stacked(_ plans: [FilePlan], name: String,
                         template: [UnifiedColumn] = [],
                         key: UnifiedColumn? = nil,
-                        keyPattern: KeyPattern = .auto) -> BaseSheet {
+                        keyPattern: KeyPattern = .auto,
+                        identity: [UnifiedColumn] = []) -> BaseSheet {
         var headers: [String] = []
         var seenHeader = Set<String>()
         for col in template where seenHeader.insert(col.rawValue).inserted {
@@ -205,6 +218,7 @@ extension BaseSheet {
         var mergedByKey = 0
         var generatedKeys = 0
         var indexByKey: [String: Int] = [:]
+        var indexByIdentity: [String: Int] = [:]
         let keyHeader = key.flatMap { k in headers.first { $0 == k.rawValue } }
         rows.reserveCapacity(plans.reduce(0) { $0 + $1.rows.count })
 
@@ -218,34 +232,55 @@ extension BaseSheet {
                     origins.append(i)
                     continue
                 }
-                var value = plan.compose(key, from: src)
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                if value.isEmpty {
-                    // 이미 쓰이고 있는 번호는 건너뛴다 — 원본 값과 부딪히지 않게.
-                    repeat {
-                        value = keyPattern.value(generatedKeys)
-                        generatedKeys += 1
-                    } while indexByKey[value.lowercased()] != nil
-                    row[keyHeader] = value
-                    rows.append(row)
-                    origins.append(i)
-                    indexByKey[value.lowercased()] = rows.count - 1
-                    continue
+                // 이 행의 ‘같은 사람인가’ 표식들 (이메일·전화 등) — 키가 없을 때 쓴다.
+                let marks = identity.compactMap { col -> String? in
+                    let k = identityKey(plan.compose(col, from: src))
+                    return k.isEmpty ? nil : k
                 }
-                row[keyHeader] = value
-                if let at = indexByKey[value.lowercased()] {
-                    // 같은 키 — 한 줄로 포갠다. 빈칸만 채우고 이미 있는 값은 지키지 않는다.
+
+                /// 이미 있는 줄에 포갠다 — 빈칸만 채우고 기존 값은 지키지 않는다.
+                func mergeInto(_ at: Int) {
                     var merged = rows[at]
                     for h in headers where (merged[h] ?? "").isEmpty {
                         merged[h] = row[h] ?? ""
                     }
                     rows[at] = merged
                     mergedByKey += 1
-                } else {
+                    for m in marks where indexByIdentity[m] == nil { indexByIdentity[m] = at }
+                }
+
+                func appendRow(_ keyValue: String) {
+                    row[keyHeader] = keyValue
                     rows.append(row)
                     origins.append(i)
-                    indexByKey[value.lowercased()] = rows.count - 1
+                    indexByKey[keyValue.lowercased()] = rows.count - 1
+                    for m in marks where indexByIdentity[m] == nil { indexByIdentity[m] = rows.count - 1 }
                 }
+
+                let value = plan.compose(key, from: src)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if !value.isEmpty {
+                    if let at = indexByKey[value.lowercased()] {
+                        row[keyHeader] = value
+                        mergeInto(at)
+                    } else {
+                        appendRow(value)
+                    }
+                    continue
+                }
+
+                // 키가 비었다 — 이메일·전화로 같은 사람을 찾아 그 줄에 붙인다.
+                if let at = marks.compactMap({ indexByIdentity[$0] }).first {
+                    mergeInto(at)
+                    continue
+                }
+                // 정말 처음 보는 사람일 때만 새 줄 + 새 번호.
+                var made = ""
+                repeat {
+                    made = keyPattern.value(generatedKeys)
+                    generatedKeys += 1
+                } while indexByKey[made.lowercased()] != nil
+                appendRow(made)
             }
         }
 

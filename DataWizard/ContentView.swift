@@ -267,7 +267,7 @@ struct ContentView: View {
                             workMergeCard
                             workPreviewCard
                             workProposalCard
-                            workSettledSummary
+                            workTodoSummary
                             workListDisclosure
                             if showAllColumns { workColumnListBody }
                         }
@@ -731,6 +731,88 @@ struct ContentView: View {
     private var autoEditableColumns: [UnifiedColumn] {
         settledColumns.filter { col in
             (valueMap[col] ?? [:]).contains { $0.key != $0.value }
+        }
+    }
+
+    /// 값을 정리해야 하는 컬럼들 — 미정리 값이 남았거나 파일마다 모양이 다른 컬럼.
+    private var columnsNeedingClean: [(column: UnifiedColumn, note: String)] {
+        finalColumns.compactMap { col in
+            guard let r = reviewFor(col), r.kind != .derived else { return nil }
+            let open = openCount(r)
+            if open > 0 { return (col, "\(open)종") }
+            if shapeConflicts.contains(col) { return (col, "파일마다 모양 다름") }
+            return nil
+        }
+    }
+
+    /// 지금 무엇이 남았는지 한 카드로 — 채울 것 / 정리할 것 / 이미 끝난 것.
+    @ViewBuilder
+    private var workTodoSummary: some View {
+        let fill = emptyColumns
+        let clean = columnsNeedingClean
+        let settled = settledColumns
+        VStack(alignment: .leading, spacing: 8) {
+            Text("남은 일").font(.headline)
+            if fill.isEmpty && clean.isEmpty {
+                Label("채울 것도, 정리할 값도 없습니다 — 이제 가져가면 돼요.",
+                      systemImage: "checkmark.seal.fill")
+                    .font(.body).foregroundStyle(.green)
+            }
+            if !fill.isEmpty {
+                todoLine("rectangle.dashed", "채워야 할 컬럼 \(fill.count)개",
+                         fill.map(\.rawValue),
+                         templateName == nil ? "값이 하나도 안 들어온 컬럼이에요."
+                                             : "틀 ‘\(templateName!)’에는 있는데 아직 값이 없어요.",
+                         "‘\(fill[0].rawValue)’ 채우기…") { configColumn = fill[0] }
+            }
+            if !clean.isEmpty {
+                todoLine("wand.and.stars", "값을 정리할 컬럼 \(clean.count)개",
+                         clean.map { "\($0.column.rawValue) (\($0.note))" },
+                         "오타·형식이 어긋난 값이 남아 있어요.",
+                         "‘\(clean[0].column.rawValue)’부터 정리 →") {
+                    focusColumns = [clean[0].column]
+                    withBusy("‘\(clean[0].column.rawValue)’ 검토 화면을 만드는 중…") { startWork() }
+                }
+            }
+            if !settled.isEmpty {
+                todoLine("checkmark.circle.fill", "손댈 것 없이 완성되는 컬럼 \(settled.count)개",
+                         settled.map(\.rawValue),
+                         "고르지 않아도 결과 파일에 그대로 들어갑니다.", nil, nil)
+                if !autoEditableColumns.isEmpty {
+                    Toggle(isOn: $autoFillSettled) {
+                        Text("이 중 \(autoEditableColumns.count)개는 정해 둔 규칙대로 다듬어서 채우기")
+                            .font(.body)
+                    }
+                    .toggleStyle(.checkbox)
+                }
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .fill(fill.isEmpty && clean.isEmpty ? Color.green.opacity(0.07)
+                                                : Color.primary.opacity(0.04)))
+    }
+
+    /// 남은 일 한 줄 — 무엇이 몇 개인지, 어떤 컬럼인지, 바로 가는 버튼.
+    private func todoLine(_ symbol: String, _ title: String, _ names: [String],
+                          _ why: String, _ actionTitle: String?,
+                          _ action: (() -> Void)?) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: symbol).foregroundStyle(.secondary).font(.body)
+                .frame(width: 16)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.body.weight(.semibold))
+                Text(names.prefix(8).joined(separator: " · ")
+                     + (names.count > 8 ? " 외 \(names.count - 8)개" : ""))
+                    .font(.body).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(why).font(.body).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            if let actionTitle, let action {
+                Button(actionTitle, action: action).controlSize(.small)
+            }
         }
     }
 
@@ -1597,7 +1679,7 @@ struct ContentView: View {
         if !baseIsUserFile {
             base = BaseSheet.stacked(plans, name: stackedName(plans),
                                      template: templateColumns, key: keyColumn,
-                                 keyPattern: keyPattern)
+                                 keyPattern: keyPattern, identity: identityColumns)
         }
 
         var next = before.intersection(Set(finalColumns))
@@ -3843,7 +3925,7 @@ struct ContentView: View {
         if !baseIsUserFile {
             base = BaseSheet.stacked(built, name: stackedName(built),
                                      template: templateColumns, key: keyColumn,
-                                 keyPattern: keyPattern)
+                                 keyPattern: keyPattern, identity: identityColumns)
         }
         finalColumns = (!baseIsUserFile ? base?.columns : nil)
             ?? ColumnReviewBuilder.plainColumns(in: built)
@@ -3871,7 +3953,7 @@ struct ContentView: View {
             keyColumn = auto
             base = BaseSheet.stacked(plans, name: stackedName(plans),
                                      template: templateColumns, key: auto,
-                                     keyPattern: keyPattern)
+                                     keyPattern: keyPattern, identity: identityColumns)
             finalColumns = base?.columns ?? finalColumns
         }
         includedColumns = focusColumns
@@ -4058,7 +4140,7 @@ struct ContentView: View {
         }
         base = BaseSheet.stacked(plans, name: stackedName(plans),
                                  template: templateColumns, key: keyColumn,
-                                 keyPattern: keyPattern)
+                                 keyPattern: keyPattern, identity: identityColumns)
         finalColumns = base?.columns ?? ColumnReviewBuilder.plainColumns(in: plans)
         reviews = ColumnReviewBuilder.plainReviews(in: plans)
         seedValueMap(from: reviews)
@@ -4311,6 +4393,24 @@ struct ContentView: View {
             guard total > 0, filled * 2 >= total else { return false }   // 절반 이상 채워져 있고
             return dup * 10 <= filled                                    // 겹치는 값이 10% 이하
         }
+    }
+
+    /// 키가 없을 때 ‘같은 사람인가’를 가릴 컬럼들 — 이메일·전화처럼 생긴 값 우선.
+    private var identityColumns: [UnifiedColumn] {
+        let candidates = keyCandidates.filter { $0 != keyColumn }
+        func looksLikeContact(_ col: UnifiedColumn) -> Bool {
+            var checked = 0, hits = 0
+            for plan in plans where plan.isMapped(col) {
+                for row in plan.rows.prefix(60) {
+                    let v = plan.compose(col, from: row)
+                    guard !v.isEmpty else { continue }
+                    checked += 1
+                    if v.contains("@") || v.filter(\.isNumber).count >= 9 { hits += 1 }
+                }
+            }
+            return checked > 0 && hits * 2 >= checked
+        }
+        return Array(candidates.filter(looksLikeContact).prefix(2))
     }
 
     /// 키를 자동으로 골라 준다 — Code·사번처럼 사람을 가리키는 컬럼 먼저.
