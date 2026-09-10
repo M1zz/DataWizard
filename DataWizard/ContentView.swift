@@ -113,6 +113,9 @@ struct ContentView: View {
     /// 같은 이름인데 파일마다 값 모양이 크게 다른 컬럼 (합친 뒤 정리 대상).
     @State private var shapeConflicts: [UnifiedColumn] = []
     @State private var isPreparing = false
+    /// 파일을 읽는 동안 화면이 멈춘 것처럼 보이지 않게 — 진행 표시.
+    @State private var isLoadingFiles = false
+    @State private var loadingNote = ""
     @State private var isRunning = false
 
     // 전화번호(Clean) 목표 포맷 템플릿 — 모든 번호를 이 한 가지 표기로 통일.
@@ -266,9 +269,32 @@ struct ContentView: View {
             }
         }
         .onDrop(of: [.fileURL], isTargeted: $isDropTargeted, perform: acceptDroppedFiles)
+        .overlay { if isLoadingFiles { loadingOverlay } }
         // 첫 화면 카드가 실제 완성본이므로, 값·선택이 바뀌면 다시 만든다.
         .onAppear { if preview.rows.isEmpty && !plans.isEmpty { refreshPreview() } }
         .onChange(of: focusColumns) { _ in refreshPreview() }
+    }
+
+    /// 파일을 읽는 동안 덮어 두는 진행 표시 — ‘멈춘 게 아니라 일하는 중’임을 보여 준다.
+    private var loadingOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.08).ignoresSafeArea()
+            VStack(spacing: 12) {
+                ProgressView().controlSize(.large)
+                Text(loadingNote.isEmpty ? "여는 중…" : loadingNote)
+                    .font(.body.weight(.medium))
+                    .lineLimit(2).multilineTextAlignment(.center)
+                Text("파일이 크면 몇 초 걸릴 수 있어요")
+                    .font(.body).foregroundStyle(.secondary)
+            }
+            .padding(28)
+            .frame(maxWidth: 420)
+            .background(RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(.regularMaterial))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1))
+        }
+        .transition(.opacity)
     }
 
     private func dropOverlay(_ title: String) -> some View {
@@ -313,6 +339,7 @@ struct ContentView: View {
             }
             .help("지금 합쳐진 결과를 큰 창으로 봅니다. 파일 색·컬럼 상태가 그대로 보여요.")
             Button("파일 더 넣기…") { pickWorkFiles() }
+                .disabled(isLoadingFiles)
             Button {
                 // 고른 게 없으면 막지 않는다 — 손 안 대고 그대로 뽑는 것도 정상적인 결과.
                 if focusColumns.isEmpty { runMerge() } else { startWork() }
@@ -1404,22 +1431,28 @@ struct ContentView: View {
 
         var owners: [UnifiedColumn: Set<Int>] = [:]
         var values: [UnifiedColumn: [String]] = [:]
+        var profiles: [UnifiedColumn: ColumnMatcher.Profile] = [:]
         for col in partial {
             owners[col] = Set(plans.indices.filter { plans[$0].isMapped(col) })
-            values[col] = ColumnReviewBuilder.rawValues(col, in: plans)
+            let vals = ColumnReviewBuilder.rawValues(col, in: plans)
+            values[col] = vals
+            profiles[col] = ColumnMatcher.profile(vals)   // 컬럼마다 딱 한 번만 훑는다
         }
 
         var out: [ColumnMatcher.Suggestion] = []
         var used = Set<UnifiedColumn>()
         // finalColumns 순서대로 도니까 먼저 나온(앞 파일의) 이름이 남는 이름이 된다.
         for col in partial where !used.contains(col) {
-            let targets = partial.filter { other in
-                other != col && !used.contains(other)
-                    && (owners[col] ?? []).isDisjoint(with: owners[other] ?? [])
-            }.map { (column: $0, values: values[$0] ?? []) }
+            guard let mineProfile = profiles[col] else { continue }
+            let targets = partial.compactMap { other -> (UnifiedColumn, ColumnMatcher.Profile)? in
+                guard other != col, !used.contains(other),
+                      (owners[col] ?? []).isDisjoint(with: owners[other] ?? []),
+                      let p = profiles[other] else { return nil }
+                return (other, p)
+            }
             guard !targets.isEmpty else { continue }
-            let found = ColumnMatcher.suggest(sources: [(column: col, values: values[col] ?? [])],
-                                              targets: targets)
+            let found = ColumnMatcher.suggest(sourceProfiles: [(col, mineProfile)],
+                                              targetProfiles: targets)
             guard let best = found.first?.best else { continue }
             // 남길 이름은 먼저 나온 `col` — 뒤 파일의 컬럼을 이쪽으로 옮긴다.
             out.append(ColumnMatcher.Suggestion(
@@ -1613,6 +1646,7 @@ struct ContentView: View {
                 }
                 .controlSize(.large)
                 .buttonStyle(.borderedProminent)
+                .disabled(isLoadingFiles)
                 Text("전에 만들어 둔 통합본은 여기 말고 위 1번 칸에 넣어 주세요.")
                     .font(.body).foregroundStyle(.secondary)
             }
@@ -3674,18 +3708,49 @@ struct ContentView: View {
     /// 파일들을 유틸 모드로 더한다. 이미 있는 파일은 건너뛴다.
     /// 올린 파일들이 곧 결과물의 기준선이라, 고친 컬럼만 제자리에 덮어써 돌려줄 수 있다.
     private func addWorkFiles(_ urls: [URL]) {
-        guard !urls.isEmpty else { return }
-        var built = isUtility ? plans : []
-        let existing = Set(built.map { $0.url })
-        var failure: String?
-        for url in urls where !existing.contains(url) {
-            do { built.append(try PlanBuilder.passthrough(url: url)) }
-            catch { failure = "\(url.lastPathComponent): \(error.localizedDescription)"; break }
-        }
-        guard failure == nil else { errorMessage = failure; return }
-        guard !built.isEmpty else { return }
+        guard !urls.isEmpty, !isLoadingFiles else { return }
+        let keep = isUtility ? plans : []
+        let existing = Set(keep.map { $0.url })
+        let todo = urls.filter { !existing.contains($0) }
+        guard !todo.isEmpty else { return }
+
+        // 파일 읽기는 백그라운드에서 — 큰 xlsx는 몇 초 걸린다.
+        isLoadingFiles = true
         errorMessage = nil
-        adoptWorkPlans(built)
+        loadingNote = "파일 읽는 중… (0/\(todo.count))"
+        DispatchQueue.global(qos: .userInitiated).async {
+            var built = keep
+            var failure: String?
+            for (i, url) in todo.enumerated() {
+                let note = "‘\(url.lastPathComponent)’ 읽는 중… (\(i + 1)/\(todo.count))"
+                DispatchQueue.main.async { loadingNote = note }
+                do { built.append(try PlanBuilder.passthrough(url: url)) }
+                catch {
+                    failure = "\(url.lastPathComponent): \(error.localizedDescription)"
+                    break
+                }
+            }
+            let result = built
+            let error = failure
+            DispatchQueue.main.async {
+                guard error == nil else {
+                    errorMessage = error
+                    isLoadingFiles = false
+                    return
+                }
+                guard !result.isEmpty else {
+                    isLoadingFiles = false
+                    return
+                }
+                // 컬럼 맞추기·미리보기 만들기는 상태를 건드려야 해서 메인에서 —
+                // 화면에 진행 표시를 먼저 그린 뒤 한 박자 늦게 시작한다.
+                loadingNote = "컬럼 맞추고 미리보기 만드는 중…"
+                DispatchQueue.main.async {
+                    adoptWorkPlans(result)
+                    isLoadingFiles = false
+                }
+            }
+        }
     }
 
     private func removeWorkFile(_ plan: FilePlan) {

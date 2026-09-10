@@ -183,23 +183,32 @@ enum ColumnMatcher {
                         targets: [(column: UnifiedColumn, values: [String])],
                         minScore: Double = 0.5,
                         maxCandidates: Int = 5) -> [Suggestion] {
-        guard !sources.isEmpty, !targets.isEmpty else { return [] }
-        let targetProfiles = targets.map { ($0.column, profile($0.values)) }
+        suggest(sourceProfiles: sources.map { ($0.column, profile($0.values)) },
+                targetProfiles: targets.map { ($0.column, profile($0.values)) },
+                minScore: minScore, maxCandidates: maxCandidates)
+    }
+
+    /// 값 훑기(profile)를 이미 해 둔 경우 — 컬럼이 많을 때 이쪽을 쓴다.
+    /// 컬럼 100개를 서로 견주면 profile을 매번 다시 만드는 것만으로 몇 초가 날아간다.
+    static func suggest(sourceProfiles: [(UnifiedColumn, Profile)],
+                        targetProfiles: [(UnifiedColumn, Profile)],
+                        minScore: Double = 0.5,
+                        maxCandidates: Int = 5) -> [Suggestion] {
+        guard !sourceProfiles.isEmpty, !targetProfiles.isEmpty else { return [] }
 
         var out: [Suggestion] = []
-        for src in sources {
-            let sp = profile(src.values)
+        for (sourceColumn, sp) in sourceProfiles {
             guard sp.distinct > 0 else { continue }
             var cands: [Candidate] = []
-            for (col, tp) in targetProfiles where tp.distinct > 0 {
+            for (col, tp) in targetProfiles where tp.distinct > 0 && col != sourceColumn {
                 let r = score(source: sp, target: tp,
-                              sourceName: src.column.rawValue, targetName: col.rawValue)
+                              sourceName: sourceColumn.rawValue, targetName: col.rawValue)
                 guard r.score >= minScore else { continue }
                 cands.append(Candidate(column: col, score: r.score, reason: r.reason))
             }
             guard !cands.isEmpty else { continue }
             cands.sort { $0.score > $1.score }
-            out.append(Suggestion(source: src.column,
+            out.append(Suggestion(source: sourceColumn,
                                   candidates: Array(cands.prefix(maxCandidates))))
         }
         return out.sorted { ($0.best?.score ?? 0) > ($1.best?.score ?? 0) }
