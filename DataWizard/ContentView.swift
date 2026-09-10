@@ -1031,6 +1031,20 @@ struct ContentView: View {
             .overlay(alignment: .leading) { proposalEdge(here) }
             .overlay(alignment: .trailing) { proposalEdge(here) }
             .help(value)
+            .contextMenu {
+                Button("이 값 복사") { copyToPasteboard(value) }
+                    .disabled(value.isEmpty)
+                Button("‘\(col.rawValue)’ 열 전체 복사") {
+                    copyToPasteboard(preview.rows.map { $0[col] }.joined(separator: "\n"))
+                }
+                Divider()
+                Button("큰 창에서 고치기…") { openPreviewWindow() }
+            }
+    }
+
+    private func copyToPasteboard(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 
     private var previewLegend: some View {
