@@ -65,6 +65,8 @@ struct BaseSheet {
     var duplicateRows: Set<Int> = []
     /// 그런 무리가 몇 개인지 (2행이 한 사람이면 1무리).
     var duplicateGroups = 0
+    /// 중복 행 → 앞서 나온 같은 사람의 행 번호 (‘몇 행과 같은지’ 보여 주기 위해).
+    var duplicateOf: [Int: Int] = [:]
     /// 출력 행마다 ‘몇 번째 파일의 몇 번째 줄’인지 — 사용자가 고른 행을 정확히 지우기 위해.
     var rowSourceIDs: [String] = []
     /// 키 컬럼으로 합치면서 한 줄로 포갠 행 수 (안내용).
@@ -262,6 +264,7 @@ extension BaseSheet {
         }
 
         var duplicateRows = Set<Int>()
+        var duplicateOf: [Int: Int] = [:]
         var duplicateGroups = 0
         var groupSeen = Set<String>()
         var sourceIDs: [String] = []
@@ -306,6 +309,7 @@ extension BaseSheet {
                 // 앞에 같은 사람이 있었으면 ‘중복’으로 **표시만** 한다 (지우지 않는다).
                 if let first = marks.compactMap({ indexByIdentity[$0] }).first {
                     duplicateRows.insert(at)
+                    duplicateOf[at] = first
                     let groupID = marks.first ?? "\(first)"
                     if groupSeen.insert(groupID).inserted { duplicateGroups += 1 }
                 }
@@ -321,6 +325,7 @@ extension BaseSheet {
         return BaseSheet(name: name, headers: headers, rows: rows,
                          columnHeader: columnHeader,
                          duplicateRows: duplicateRows, duplicateGroups: duplicateGroups,
+                         duplicateOf: duplicateOf,
                          rowSourceIDs: sourceIDs,
                          mergedByKey: mergedByKey, generatedKeys: generatedKeys,
                          rowOrigins: origins)

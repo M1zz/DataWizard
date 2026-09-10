@@ -4906,6 +4906,7 @@ struct ContentView: View {
         preview.baseName = baseIsUserFile ? base.name : ""
         preview.newRows = p.newRowIndices
         preview.duplicateRows = base.duplicateRows
+        preview.duplicateOf = base.duplicateOf
         sendRowKeys(rows)
         preview.fileNames = plans.map(\.fileName)
         sendColumnMarks()
@@ -7245,6 +7246,8 @@ final class PreviewModel: ObservableObject {
     @Published var confirmedRows: Set<String> = []
     /// 중복으로 보이는 행 (지운 게 아니라 표시만).
     @Published var duplicateRows: Set<Int> = []
+    /// 중복 행 → 앞서 나온 같은 사람의 행 번호.
+    @Published var duplicateOf: [Int: Int] = [:]
     /// 창을 열 때 중복만 보여 줄지.
     @Published var showDuplicatesOnly = false
 
@@ -7341,7 +7344,8 @@ final class PreviewModel: ObservableObject {
         columns = []; checked = []
         rowFiles = []; fileNames = []
         splitColumns = []; pairHints = [:]; columnOwners = [:]; baseName = ""; newRows = []
-        emptyColumns = []; rowKeys = []; duplicateRows = []; showDuplicatesOnly = false
+        emptyColumns = []; rowKeys = []; duplicateRows = []; duplicateOf = [:]
+        showDuplicatesOnly = false
         selection = []; request = nil
         openCounts = [:]; decisionColumns = []
         focused = nil
@@ -7515,6 +7519,9 @@ struct PreviewWindowView: View {
     @State private var query = ""
     @State private var improvedOnly = false
     @State private var unconfirmedOnly = false
+    /// 중복 짝으로 데려갈 행, 그리고 잠깐 비춰 줄 행.
+    @State private var jumpTarget: Int?
+    @State private var flashRow: Int?
     /// 값을 고치는 중인 셀 (컬럼 · 지금 값).
     struct EditTarget: Identifiable {
         let column: UnifiedColumn
@@ -7670,6 +7677,7 @@ struct PreviewWindowView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
+                ScrollViewReader { proxy in
                 ScrollView([.horizontal, .vertical]) {
                     LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
                         Section {
@@ -7680,8 +7688,10 @@ struct PreviewWindowView: View {
                                         bodyCell(c, row: row, at: i)
                                     }
                                 }
+                                .background(flashRow == i ? Color.yellow.opacity(0.35) : .clear)
                                 .background(model.isConfirmed(i) ? Color.green.opacity(0.10) : .clear)
                                 .background(showColors ? (model.fileTint(row: i)?.opacity(0.14) ?? .clear) : .clear)
+                                .id(i)
                                 Divider()
                             }
                         } header: {
@@ -7697,6 +7707,18 @@ struct PreviewWindowView: View {
                             .background(Color(nsColor: .underPageBackgroundColor))
                         }
                     }
+                }
+                .onChange(of: jumpTarget) { target in
+                    guard let target else { return }
+                    // 중복 짝을 눌렀을 때 그 행으로 데려가고 잠깐 노랗게 비춘다.
+                    if model.showDuplicatesOnly { model.showDuplicatesOnly = false }
+                    withAnimation { proxy.scrollTo(target, anchor: .center) }
+                    flashRow = target
+                    jumpTarget = nil
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                        if flashRow == target { flashRow = nil }
+                    }
+                }
                 }
                 Divider()
                 legendBar
@@ -7742,16 +7764,20 @@ struct PreviewWindowView: View {
                   ? "개선됨\n이전: \(i < model.baselineRows.count ? model.baselineRows[i][c] : "")\n이후: \(value)"
                   : value)
             .contextMenu { cellMenu(c, value) }
+            // 더블클릭하면 바로 고치기 창 (오른쪽 클릭 메뉴와 같은 동작).
+            .onTapGesture(count: 2) {
+                editText = value
+                editing = EditTarget(column: c, value: value)
+            }
     }
 
     /// 셀에서 바로 할 수 있는 일 — 복사와 값 고치기.
     @ViewBuilder
     private func cellMenu(_ c: UnifiedColumn, _ value: String) -> some View {
-        Button("값 고치기…") {
+        Button(value.isEmpty ? "빈 칸 채우기…" : "값 고치기…") {
             editText = value
             editing = EditTarget(column: c, value: value)
         }
-        .disabled(value.isEmpty)
         Divider()
         Button("이 값 복사") { copyToClipboard(value) }
             .disabled(value.isEmpty)
@@ -7781,11 +7807,13 @@ struct PreviewWindowView: View {
     private func editSheet(_ target: EditTarget) -> some View {
         let affected = model.rows.filter { $0[target.column] == target.value }.count
         return VStack(alignment: .leading, spacing: 12) {
-            Text("‘\(target.column.rawValue)’ 값 고치기")
+            Text(target.value.isEmpty ? "‘\(target.column.rawValue)’ 빈 칸 채우기"
+                                      : "‘\(target.column.rawValue)’ 값 고치기")
                 .font(.title2.weight(.bold))
             HStack(spacing: 8) {
-                Text(target.value)
+                Text(target.value.isEmpty ? "(빈 칸)" : target.value)
                     .font(.body)
+                    .foregroundStyle(target.value.isEmpty ? .secondary : .primary)
                     .padding(.horizontal, 8).padding(.vertical, 4)
                     .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.06)))
                 Image(systemName: "arrow.right").foregroundStyle(.secondary)
@@ -7793,9 +7821,11 @@ struct PreviewWindowView: View {
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 260)
             }
-            Text(affected > 1
-                 ? "이 컬럼에서 ‘\(target.value)’인 \(affected)행이 함께 바뀝니다."
-                 : "이 값 1행이 바뀝니다.")
+            Text(target.value.isEmpty
+                 ? "이 컬럼에서 비어 있는 \(affected)행이 모두 이 값으로 채워집니다."
+                 : (affected > 1
+                    ? "이 컬럼에서 ‘\(target.value)’인 \(affected)행이 함께 바뀝니다."
+                    : "이 값 1행이 바뀝니다."))
                 .font(.body).foregroundStyle(.secondary)
             HStack {
                 Spacer()
@@ -7838,11 +7868,20 @@ struct PreviewWindowView: View {
                     .fill(tint ?? Color.secondary.opacity(0.35))
                     .frame(width: 3, height: 14)
                 if model.duplicateRows.contains(i) {
-                Text("중복")
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(.orange)
-                    .padding(.horizontal, 5).padding(.vertical, 1)
-                    .background(Capsule().fill(Color.orange.opacity(0.16)))
+                let twin = model.duplicateOf[i]
+                Button {
+                    if let twin { jumpTarget = twin }
+                } label: {
+                    Text(twin.map { "중복 ↑\($0 + 1)행" } ?? "중복")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.orange)
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(Capsule().fill(Color.orange.opacity(0.16)))
+                }
+                .buttonStyle(.plain)
+                .disabled(twin == nil)
+                .help(twin.map { "\($0 + 1)행과 같은 사람으로 보입니다 — 눌러서 그 행으로 갑니다." }
+                      ?? "앞줄에 같은 사람이 있습니다.")
             }
             if let badge = model.rowBadge(row: i) {
                     Text(badge)
