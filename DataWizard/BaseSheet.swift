@@ -197,6 +197,29 @@ extension BaseSheet {
         return "v:" + t
     }
 
+    /// 이 파일에서 이메일·전화처럼 생긴 컬럼을 찾는다 — **헤더 이름이 달라도** 값 모양으로 안다.
+    /// (`이메일 주소`와 `Email Address`를 미리 짝지어 두지 않아도 같은 사람을 알아보기 위해.)
+    static func contactColumns(of plan: FilePlan) -> [UnifiedColumn] {
+        var email: UnifiedColumn?
+        var phone: UnifiedColumn?
+        for header in plan.headers {
+            guard let col = UnifiedColumn(rawValue: header), plan.isMapped(col) else { continue }
+            var checked = 0, mails = 0, phones = 0
+            for row in plan.rows.prefix(80) {
+                let v = plan.compose(col, from: row).trimmingCharacters(in: .whitespaces)
+                guard !v.isEmpty else { continue }
+                checked += 1
+                if v.contains("@"), v.contains(".") { mails += 1 }
+                let digits = v.filter(\.isNumber).count
+                if digits >= 9, digits <= 15, v.count <= 20 { phones += 1 }
+            }
+            guard checked >= 3 else { continue }
+            if email == nil, mails * 10 >= checked * 8 { email = col; continue }
+            if phone == nil, phones * 10 >= checked * 8 { phone = col }
+        }
+        return [email, phone].compactMap { $0 }
+    }
+
     /// `identity`는 키가 비었을 때 ‘그래도 같은 사람인지’ 가릴 컬럼들 (이메일·전화 등).
     /// 덕분에 키가 없는 파일의 행도 새 줄을 만들지 않고 기존 줄에 붙는다.
     static func stacked(_ plans: [FilePlan], name: String,
@@ -222,21 +245,38 @@ extension BaseSheet {
         let keyHeader = key.flatMap { k in headers.first { $0 == k.rawValue } }
         rows.reserveCapacity(plans.reduce(0) { $0 + $1.rows.count })
 
+        // 파일마다 ‘같은 사람’ 표식이 될 컬럼 — 지정이 없으면 값 모양으로 찾아낸다.
+        let planIdentity: [[UnifiedColumn]] = plans.map { plan in
+            let given = identity.filter { plan.isMapped($0) }
+            return given.isEmpty ? contactColumns(of: plan) : given
+        }
+
         for (i, plan) in plans.enumerated() {
             for src in plan.rows {
                 var row: [String: String] = [:]
                 for h in headers { row[h] = src[h] ?? "" }
 
-                guard let key, let keyHeader else {
-                    rows.append(row)
-                    origins.append(i)
-                    continue
-                }
-                // 이 행의 ‘같은 사람인가’ 표식들 (이메일·전화 등) — 키가 없을 때 쓴다.
-                let marks = identity.compactMap { col -> String? in
+                let marksOnly = planIdentity[i].compactMap { col -> String? in
                     let k = identityKey(plan.compose(col, from: src))
                     return k.isEmpty ? nil : k
                 }
+
+                guard let key, let keyHeader else {
+                    // 키가 없어도 같은 사람이면 새 줄을 만들지 않는다.
+                    if let at = marksOnly.compactMap({ indexByIdentity[$0] }).first {
+                        var merged = rows[at]
+                        for h in headers where (merged[h] ?? "").isEmpty { merged[h] = row[h] ?? "" }
+                        rows[at] = merged
+                        mergedByKey += 1
+                        for m in marksOnly where indexByIdentity[m] == nil { indexByIdentity[m] = at }
+                        continue
+                    }
+                    rows.append(row)
+                    origins.append(i)
+                    for m in marksOnly where indexByIdentity[m] == nil { indexByIdentity[m] = rows.count - 1 }
+                    continue
+                }
+                let marks = marksOnly
 
                 /// 이미 있는 줄에 포갠다 — 빈칸만 채우고 기존 값은 지키지 않는다.
                 func mergeInto(_ at: Int) {

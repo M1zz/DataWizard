@@ -75,6 +75,8 @@ struct ContentView: View {
     @State private var showSettledColumns = false
     /// 전체 컬럼 체크 목록을 펼쳤는가. 기본은 접힘 — 한 번에 하나씩 제안한다.
     @State private var showAllColumns = false
+    /// 여러 컬럼을 한 칸으로 합치기 전 확인 (nil이면 안 물어봄).
+    @State private var confirmMerge: [UnifiedColumn]?
     /// 지금 제안하고 있는 컬럼의 순서 (할 일이 적은 것부터).
     @State private var proposalIndex = 0
     /// 합치기 단계에서 사람이 확인을 마친 항목들 (한 번에 하나씩 보여 주기 위해).
@@ -138,8 +140,23 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var resumable: SessionSnapshot?
     @State private var saveDebouncer = SaveDebouncer()
+    /// 마지막으로 자동 저장한 시각 — 저장되고 있다는 걸 눈으로 확인시켜 준다.
+    @State private var lastSavedAt: Date?
 
     var body: some View {
+        stagedContent
+            .modifier(SessionAutosave(save: { scheduleSave() },
+                                      saveNow: { saveNow() },
+                                      scenePhase: scenePhase,
+                                      valueMap: valueMap, allowedValues: allowedValues,
+                                      checked: checked, includedColumns: includedColumns,
+                                      focusColumns: focusColumns, finalColumns: finalColumns,
+                                      stage: stage, planCount: plans.count,
+                                      keyColumn: keyColumn, templateName: templateName))
+    }
+
+    /// 화면 + 시트들. (한 덩어리로 두면 타입 체크가 버거워 저장 감시와 나눠 둔다.)
+    private var stagedContent: some View {
         Group {
             switch stage {
             case .work:    workStage
@@ -153,6 +170,10 @@ struct ContentView: View {
         .frame(minWidth: 820, minHeight: 580)
         .background(Color(nsColor: .windowBackgroundColor))
         .overlay { if busyNote != nil { loadingOverlay } }
+        .sheet(isPresented: Binding(get: { confirmMerge != nil },
+                                    set: { if !$0 { confirmMerge = nil } })) {
+            mergeConfirmSheet
+        }
         .sheet(item: $filePreview) { plan in
             FilePreviewSheet(plan: plan,
                              tint: fileTint(plans.firstIndex(where: { $0.id == plan.id }) ?? 0),
@@ -212,20 +233,15 @@ struct ContentView: View {
         }
         // 완성본 미리보기 창에서 누른 동작을 여기서 실제로 수행한다.
         .onChange(of: preview.request) { req in handlePreviewRequest(req) }
-        // 작업 상태가 바뀔 때마다 (debounce) 자동 저장 — 언제 멈춰도 이어서 가능.
-        .onChange(of: valueMap) { _ in scheduleSave() }
-        .onChange(of: allowedValues) { _ in scheduleSave() }
         .onChange(of: typeOverride) { _ in scheduleSave() }
         .onChange(of: formatChoice) { _ in scheduleSave() }
         .onChange(of: customFormat) { _ in scheduleSave() }
-        .onChange(of: checked) { _ in scheduleSave() }
-        .onChange(of: includedColumns) { _ in scheduleSave() }
         .onChange(of: phoneTemplate) { _ in scheduleSave() }
-        .onChange(of: referenceName) { _ in scheduleSave() }
-        .onChange(of: focusColumns) { _ in scheduleSave() }
-        .onChange(of: stage) { _ in scheduleSave() }
+        .onChange(of: templateColumns) { _ in scheduleSave() }
+        // 작업 상태가 바뀔 때마다 (debounce) 자동 저장 — 언제 멈춰도 이어서 가능.
+
         // 창을 내리거나 앱을 벗어나는 순간 즉시 저장.
-        .onChange(of: scenePhase) { phase in if phase != .active { saveNow() } }
+
     }
 
     /// Detail viewer for one column, with the same anomaly flags used in review.
@@ -268,8 +284,7 @@ struct ContentView: View {
                             workPreviewCard
                             workProposalCard
                             workTodoSummary
-                            workListDisclosure
-                            if showAllColumns { workColumnListBody }
+                            workColumnBoard
                         }
                         .padding(24)
                     }
@@ -350,6 +365,7 @@ struct ContentView: View {
                 }
             }
             Spacer()
+            savedBadge
             if let errorMessage { errorLabel(errorMessage).frame(maxWidth: 240) }
             Button {
                 openPreviewWindow()
@@ -855,31 +871,168 @@ struct ContentView: View {
         }
     }
 
-    /// 전체 컬럼 체크 목록은 접어 둔다 — 필요할 때만 편다.
-    private var workListDisclosure: some View {
-        Button {
-            withAnimation(.easeInOut(duration: 0.18)) { showAllColumns.toggle() }
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: showAllColumns ? "chevron.down" : "chevron.right")
-                    .font(.body.weight(.bold))
-                Text(showAllColumns
-                     ? "목록 접기"
-                     : "전체 컬럼 목록에서 직접 고르기 (\(finalColumns.count)개)")
-                if !showAllColumns, !focusColumns.isEmpty {
-                    Text("\(focusColumns.count)개 고름")
-                        .font(.body.weight(.semibold))
-                        .padding(.horizontal, 7).padding(.vertical, 2)
-                        .background(Capsule().fill(Color.accentColor.opacity(0.14)))
-                        .foregroundStyle(Color.accentColor)
+    /// 여러 컬럼을 한 칸으로 합치기 전 확인 — 무엇이 어디로 가는지 보여 준다.
+    @ViewBuilder
+    private var mergeConfirmSheet: some View {
+        if let cols = confirmMerge, cols.count >= 2 {
+            let target = cols[0]
+            let sources = Array(cols.dropFirst())
+            VStack(alignment: .leading, spacing: 12) {
+                Text("한 칸으로 합치기").font(.title2.weight(.bold))
+                Text(sources.map(\.rawValue).joined(separator: " · ") + " → ‘\(target.rawValue)’")
+                    .font(.body.weight(.semibold))
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("앞에 있는 ‘\(target.rawValue)’ 이름이 남고, 나머지 칸의 값이 그 자리로 들어갑니다. "
+                     + "한 파일에 둘 다 값이 있으면 공백으로 이어 붙여요 (성 + 이름처럼).")
+                    .font(.body).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack {
+                    Spacer()
+                    Button("취소") { confirmMerge = nil }
+                    Button("합치기") {
+                        let pairs = sources.map { (source: $0, target: target) }
+                        confirmMerge = nil
+                        focusColumns = [target]
+                        withBusy("컬럼을 합치는 중…") { applyMatches(pairs) }
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
                 }
-                Spacer()
             }
-            .font(.body).foregroundStyle(.secondary)
-            .padding(.horizontal, 6).padding(.vertical, 10)
+            .padding(20)
+            .frame(minWidth: 460)
+        }
+    }
+
+    /// 컬럼을 눌러 고르는 판 — 하나 고르면 정리하러 가고, 여럿 고르면 함께 정리하거나 합친다.
+    private var workColumnBoard: some View {
+        let split = workColumnSplit
+        let picked = finalColumns.filter { focusColumns.contains($0) }
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Text("컬럼 고르기").font(.headline)
+                Text("눌러서 고르고, 여러 개를 골라 함께 정리하거나 한 칸으로 합칠 수 있어요")
+                    .font(.body).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 8)
+                Button("손볼 것만") {
+                    focusColumns = Set(split.todo)
+                    showAllColumns = false
+                }
+                .disabled(split.todo.isEmpty)
+                Button("모두") { focusColumns = Set(finalColumns); showAllColumns = true }
+                Button("해제") { focusColumns = [] }
+            }
+            if !picked.isEmpty { boardActionBar(picked) }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 230), spacing: 8)],
+                      alignment: .leading, spacing: 8) {
+                ForEach(split.todo) { col in columnChip(col) }
+                if showAllColumns {
+                    ForEach(split.settled) { col in columnChip(col) }
+                }
+            }
+            if !split.settled.isEmpty {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.18)) { showAllColumns.toggle() }
+                } label: {
+                    Label(showAllColumns
+                          ? "정리된 컬럼 접기"
+                          : "정리된 컬럼도 보기 (\(split.settled.count)개)",
+                          systemImage: showAllColumns ? "chevron.up" : "chevron.down")
+                        .font(.body).foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .fill(Color.primary.opacity(0.03)))
+    }
+
+    /// 고른 컬럼으로 할 수 있는 일 — 개수에 따라 문구가 바뀐다.
+    private func boardActionBar(_ picked: [UnifiedColumn]) -> some View {
+        HStack(spacing: 10) {
+            Text(picked.count == 1 ? "‘\(picked[0].rawValue)’ 골랐어요"
+                                   : "\(picked.count)개 골랐어요")
+                .font(.body.weight(.semibold))
+            Text(picked.prefix(4).map(\.rawValue).joined(separator: " · ")
+                 + (picked.count > 4 ? " 외" : ""))
+                .font(.body).foregroundStyle(.secondary)
+                .lineLimit(1).truncationMode(.tail)
+            Spacer(minLength: 8)
+            if picked.count >= 2 {
+                Button {
+                    confirmMerge = picked
+                } label: {
+                    Label("한 칸으로 합치기", systemImage: "arrow.trianglehead.merge")
+                }
+                .help("고른 컬럼을 하나로 합칩니다. 앞에 있는 ‘\(picked[0].rawValue)’ 이름이 남아요.")
+            }
+            if picked.count == 1, emptyColumns.contains(picked[0]) {
+                Button("채울 칸 고르기…") { configColumn = picked[0] }
+            }
+            Button {
+                withBusy("검토 화면을 만드는 중…") { startWork() }
+            } label: {
+                Text(picked.count == 1 ? "이 컬럼 정리하기 →" : "\(picked.count)개 정리하기 →")
+                    .fontWeight(.semibold)
+            }
+            .buttonStyle(.borderedProminent)
+            Button("해제") { focusColumns = [] }
+                .controlSize(.small)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(Color.accentColor.opacity(0.10)))
+    }
+
+    /// 컬럼 하나짜리 칩 — 이름·상태·출처 점. 누르면 골라지고 다시 누르면 풀린다.
+    private func columnChip(_ col: UnifiedColumn) -> some View {
+        let on = focusColumns.contains(col)
+        let status = focusStatus(col)
+        let empty = emptyColumns.contains(col)
+        return Button {
+            if on { focusColumns.remove(col) } else { focusColumns.insert(col) }
+        } label: {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Image(systemName: on ? "checkmark.square.fill" : "square")
+                        .foregroundStyle(on ? Color.accentColor : Color.secondary.opacity(0.7))
+                    Text(col.rawValue)
+                        .font(.body.weight(.semibold))
+                        .lineLimit(1).truncationMode(.tail)
+                    Spacer(minLength: 0)
+                    if !status.badge.isEmpty {
+                        Text(status.badge)
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(.orange)
+                            .padding(.horizontal, 6).padding(.vertical, 1)
+                            .background(Capsule().fill(Color.orange.opacity(0.12)))
+                    }
+                }
+                HStack(spacing: 6) {
+                    if plans.count > 1 { ownerDots(col) }
+                    Text(status.text)
+                        .font(.body).foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.tail)
+                }
+            }
+            .padding(.horizontal, 12).padding(.vertical, 9)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(on ? Color.accentColor.opacity(0.10)
+                      : Color(nsColor: .controlBackgroundColor)))
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(on ? Color.accentColor.opacity(0.5)
+                              : (empty ? Color.orange.opacity(0.35) : Color.primary.opacity(0.08)),
+                              style: StrokeStyle(lineWidth: on ? 1.5 : 1,
+                                                 dash: empty && !on ? [4, 3] : [])))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .help(status.text)
     }
 
     /// 손볼 거리가 남은 컬럼 / 이미 정리된 컬럼으로 한 번에 가른다.
@@ -4728,7 +4881,19 @@ struct ContentView: View {
     private func saveNow() {
         guard !plans.isEmpty, stage != .result else { return }
         let snap = makeSnapshot()
+        lastSavedAt = Date()
         DispatchQueue.global(qos: .utility).async { SessionStore.save(snap) }
+    }
+
+    /// 툴바에 조용히 붙는 저장 표시.
+    @ViewBuilder
+    private var savedBadge: some View {
+        if let lastSavedAt {
+            Label("자동 저장됨 · \(lastSavedAt.formatted(date: .omitted, time: .shortened))",
+                  systemImage: "checkmark.icloud")
+                .font(.body).foregroundStyle(.secondary)
+                .help("작업 내용은 앱 안에 자동으로 저장됩니다. 앱을 껐다 켜도 ‘이어서 하기’로 돌아올 수 있어요.")
+        }
     }
 
     /// 스냅샷에서 작업을 그대로 복원한다 (파일 재접근 없이).
@@ -6974,6 +7139,40 @@ final class PreviewModel: ObservableObject {
         selection = []; request = nil
         openCounts = [:]; decisionColumns = []
         focused = nil
+    }
+}
+
+/// 작업 내용을 자동으로 저장한다 — 무엇이 바뀌든 0.8초 뒤 한 번,
+/// 창을 내리거나 앱을 벗어나면 즉시. (본문 뷰의 타입 체크 부담도 덜어 준다.)
+struct SessionAutosave: ViewModifier {
+    let save: () -> Void
+    let saveNow: () -> Void
+    let scenePhase: ScenePhase
+
+    let valueMap: [UnifiedColumn: [String: String]]
+    let allowedValues: [UnifiedColumn: [String]]
+    let checked: Set<UnifiedColumn>
+    let includedColumns: Set<UnifiedColumn>
+    let focusColumns: Set<UnifiedColumn>
+    let finalColumns: [UnifiedColumn]
+    let stage: ContentView.Stage
+    let planCount: Int
+    let keyColumn: UnifiedColumn?
+    let templateName: String?
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: valueMap) { _ in save() }
+            .onChange(of: allowedValues) { _ in save() }
+            .onChange(of: checked) { _ in save() }
+            .onChange(of: includedColumns) { _ in save() }
+            .onChange(of: focusColumns) { _ in save() }
+            .onChange(of: finalColumns) { _ in save() }
+            .onChange(of: stage) { _ in save() }
+            .onChange(of: planCount) { _ in save() }
+            .onChange(of: keyColumn) { _ in save() }
+            .onChange(of: templateName) { _ in save() }
+            .onChange(of: scenePhase) { phase in if phase != .active { saveNow() } }
     }
 }
 
