@@ -4016,7 +4016,23 @@ struct ContentView: View {
             mergeTwoColumns(a, b)
             preview.selection = []
             bringMainWindowToFront()
+        case .edit(let col, let before, let after):
+            editValue(col, from: before, to: after)
         }
+    }
+
+    /// 미리보기에서 고친 값 — 같은 값이면 어느 행에 있든 함께 바뀐다.
+    /// (이 도구는 ‘값 단위’로 정리하므로, 고침도 값 단위로 남는다 = 변경 보고서에 그대로 남음)
+    private func editValue(_ col: UnifiedColumn, from before: String, to after: String) {
+        let trimmed = after.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != before else { return }
+        var map = valueMap[col] ?? [:]
+        // 이미 다른 값에서 이 값으로 통일해 둔 것들도 같이 옮긴다.
+        for (k, v) in map where v == before { map[k] = trimmed }
+        map[before] = trimmed
+        valueMap[col] = map
+        refreshPreview()
+        scheduleSave()
     }
 
     /// 고른 두 컬럼을 한 칸으로. 앞(왼쪽)에 있는 컬럼 이름이 남는다.
@@ -6499,6 +6515,7 @@ final class PreviewModel: ObservableObject {
     enum PreviewRequest: Equatable {
         case clean([UnifiedColumn])                 // 고른 컬럼 정리하러 가기
         case merge(UnifiedColumn, UnifiedColumn)    // 두 컬럼을 한 칸으로
+        case edit(UnifiedColumn, String, String)    // 컬럼 · 이전 값 · 새 값
     }
 
     /// 사용자가 고른 틀 이름 (있으면 그 파일에서 온 행임을 이름으로 보여 준다).
@@ -6618,6 +6635,15 @@ struct PreviewWindowView: View {
     @ObservedObject var model = PreviewModel.shared
     @State private var query = ""
     @State private var improvedOnly = false
+    /// 값을 고치는 중인 셀 (컬럼 · 지금 값).
+    struct EditTarget: Identifiable {
+        let column: UnifiedColumn
+        let value: String
+        var id: String { column.rawValue + "\u{1}" + value }
+    }
+    @State private var editing: EditTarget?
+    @State private var editText = ""
+
     /// 파일 색·컬럼 상태 색을 켤지 (기본 켬, 설정에 기억).
     @AppStorage("previewShowColors.v2") private var showColors = true
     /// 창 제목 — 시작할 때 복원된 창을 찾아 닫는 데 쓴다.
@@ -6708,6 +6734,10 @@ struct PreviewWindowView: View {
             .toggleStyle(.checkbox)
             .fixedSize()
             .help("정리로 값이 바뀐 행만 봅니다.")
+        Button { copyTable() } label: {
+            Label("표 복사", systemImage: "doc.on.doc")
+        }
+        .help("지금 보이는 표를 탭 구분으로 복사합니다 — 엑셀·구글 시트에 그대로 붙습니다.")
         TextField("값 검색…", text: $query)
             .textFieldStyle(.roundedBorder)
             .frame(width: 180)
@@ -6760,6 +6790,7 @@ struct PreviewWindowView: View {
         }
         .frame(minWidth: 720, minHeight: 420)
         .background(NonRestorableWindow())
+        .sheet(item: $editing) { editSheet($0) }
         // 앱을 켤 때 저절로 뜨는(복원되는) 창은 닫는다 — 버튼으로 열었을 때만 남는다.
         // onAppear 시점엔 아직 창이 다 뜨지 않아 dismiss가 먹지 않을 수 있어 다음 차례로 미룬다.
         .onAppear {
@@ -6796,6 +6827,77 @@ struct PreviewWindowView: View {
             .help(improved
                   ? "개선됨\n이전: \(i < model.baselineRows.count ? model.baselineRows[i][c] : "")\n이후: \(value)"
                   : value)
+            .contextMenu { cellMenu(c, value) }
+    }
+
+    /// 셀에서 바로 할 수 있는 일 — 복사와 값 고치기.
+    @ViewBuilder
+    private func cellMenu(_ c: UnifiedColumn, _ value: String) -> some View {
+        Button("값 고치기…") {
+            editText = value
+            editing = EditTarget(column: c, value: value)
+        }
+        .disabled(value.isEmpty)
+        Divider()
+        Button("이 값 복사") { copyToClipboard(value) }
+            .disabled(value.isEmpty)
+        Button("‘\(c.rawValue)’ 열 전체 복사") {
+            copyToClipboard(model.rows.map { $0[c] }.joined(separator: "\n"))
+        }
+        Button("표 전체 복사 (붙여넣기용)") { copyTable() }
+    }
+
+    private func copyToClipboard(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    /// 지금 보이는 표를 탭으로 구분해 복사 — 엑셀·시트에 그대로 붙습니다.
+    private func copyTable() {
+        var lines: [String] = []
+        lines.append((["행", "출처"] + model.columns.map(\.rawValue)).joined(separator: "\t"))
+        for (i, row) in visibleRows {
+            let cells = model.columns.map { row[$0].replacingOccurrences(of: "\t", with: " ") }
+            lines.append((["\(i + 1)", model.fileLabel(row: i)] + cells).joined(separator: "\t"))
+        }
+        copyToClipboard(lines.joined(separator: "\n"))
+    }
+
+    /// 값 고치기 창 — 같은 값이 여러 행에 있으면 몇 행이 함께 바뀌는지 알려 준다.
+    private func editSheet(_ target: EditTarget) -> some View {
+        let affected = model.rows.filter { $0[target.column] == target.value }.count
+        return VStack(alignment: .leading, spacing: 12) {
+            Text("‘\(target.column.rawValue)’ 값 고치기")
+                .font(.title2.weight(.bold))
+            HStack(spacing: 8) {
+                Text(target.value)
+                    .font(.body)
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.06)))
+                Image(systemName: "arrow.right").foregroundStyle(.secondary)
+                TextField("새 값", text: $editText)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 260)
+            }
+            Text(affected > 1
+                 ? "이 컬럼에서 ‘\(target.value)’인 \(affected)행이 함께 바뀝니다."
+                 : "이 값 1행이 바뀝니다.")
+                .font(.body).foregroundStyle(.secondary)
+            HStack {
+                Spacer()
+                Button("취소") { editing = nil }
+                Button("바꾸기") {
+                    model.request = .edit(target.column, target.value, editText)
+                    editing = nil
+                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+                .disabled(editText.trimmingCharacters(in: .whitespaces).isEmpty
+                          || editText == target.value)
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 460)
     }
 
     /// 행 맨 앞 칸 — 행 번호와, 어느 파일에서 온 줄인지 색·이름으로.
