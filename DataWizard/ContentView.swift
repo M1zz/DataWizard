@@ -146,6 +146,8 @@ struct ContentView: View {
     @State private var confirmedRowKeys: Set<String> = []
     /// 사용자가 직접 지운 행 (`파일#줄`). 이것 말고는 어떤 행도 사라지지 않는다.
     @State private var deletedSourceIDs: Set<String> = []
+    /// 미리보기 계산 순번 — 늦게 끝난 옛 계산이 새 결과를 덮지 않게.
+    @State private var previewToken = 0
 
     var body: some View {
         stagedContent
@@ -4628,54 +4630,53 @@ struct ContentView: View {
         }
     }
 
+    /// 미리보기를 다시 만든다 — **무거운 계산은 백그라운드에서**.
+    /// 메인 스레드를 붙잡지 않아야 마우스가 무지개로 돌지 않는다.
     private func refreshPreview() {
-        let current = currentRows()
-        let rows = current.rows
+        guard !plans.isEmpty else { return }
+        previewToken &+= 1
+        let token = previewToken
 
-        // 부분 정제·유틸 모드에서는 ‘합쳐진 새 파일’이 아니라
-        // ‘값이 덮어써진 원본’이 결과물이다.
-        if isPatching, let base {
-            refreshPatchPreview(base: base, rows: rows, generatedCodes: current.generatedCodes,
-                                origins: current.origins)
-            return
-        }
-
-        if preview.baselineRows.isEmpty {
-            // 기준선은 항상 기본 포맷 — 포맷 변경도 ‘개선’으로 표시되도록.
-            let raw = MergeEngine(plans: plans, valueMap: [:], phoneTemplate: Normalizer.defaultPhoneTemplate)
-            preview.baselineRows = (try? raw.run())?.rows ?? []
-        }
-        // 아직 고른 컬럼이 없으면(첫 화면) 전체 컬럼을 보여 준다 — 완성본이니까.
-        let cols = visibleFinalColumns.isEmpty ? finalColumns : visibleFinalColumns
-        var diff: [Int: Set<UnifiedColumn>] = [:]
-        var n = 0
-        for (i, row) in rows.enumerated() where i < preview.baselineRows.count {
-            for c in cols where row[c] != preview.baselineRows[i][c] {
-                diff[i, default: []].insert(c)
-                n += 1
-            }
-        }
-        // 컬럼별 ‘아직 할 일이 남았나’ — 검토 화면 뱃지와 같은 판정을 미리보기로 넘긴다.
+        // 상태 의존 계산은 메인에서 먼저 (가볍고, 색·뱃지는 즉시 반영된다).
         var opens: [UnifiedColumn: Int] = [:]
         var relevant: Set<UnifiedColumn> = []
-        // 컬럼을 아직 안 골랐어도(첫 화면) 색이 보이도록 전체 리뷰로 계산한다.
         for r in reviews {
             if isDecisionRelevant(r) { relevant.insert(r.column) }
             let open = openCount(r)
             if open > 0 { opens[r.column] = open }
         }
-
-        preview.rows = rows
-        preview.diff = diff
-        preview.diffCount = n
-        preview.columns = cols
         preview.checked = checked
         preview.openCounts = opens
         preview.decisionColumns = relevant
-        sendRowKeys(rows)
-        preview.rowFiles = current.origins.isEmpty ? planRowOrigins(rows.count) : current.origins
         preview.fileNames = plans.map(\.fileName)
+        preview.confirmedRows = confirmedRowKeys
         sendColumnMarks()
+        preview.isBuilding = true
+
+        // 백그라운드로 넘길 것들은 값 타입으로 복사해 간다 (뷰 상태를 건드리지 않게).
+        let input = PreviewInput(plans: plans,
+                                 valueMap: valueMap,
+                                 phoneTemplate: phoneTemplate,
+                                 codePattern: keyPattern,
+                                 isUtility: isUtility,
+                                 base: isPatching ? base : nil,
+                                 baseIsUserFile: baseIsUserFile,
+                                 patchColumns: focusOrdered,
+                                 appendNewRows: appendNewRows,
+                                 markNewRows: markNewRows,
+                                 match: rowMatch,
+                                 visibleColumns: visibleFinalColumns.isEmpty ? finalColumns
+                                                                            : visibleFinalColumns,
+                                 keyColumn: keyColumn,
+                                 needsBaseline: preview.baselineRows.isEmpty)
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let payload = PreviewBuilder.build(input)
+            DispatchQueue.main.async {
+                guard token == previewToken else { return }   // 더 새 계산이 있으면 버린다
+                preview.apply(payload)
+            }
+        }
     }
 
     /// 키로 삼을 만한 컬럼들 — 값이 (거의) 행마다 고유하고 잘 채워진 컬럼.
@@ -4762,12 +4763,6 @@ struct ContentView: View {
         }
     }
 
-    /// 올린 파일들의 행 수로 만든 ‘행 → 파일’ 표. 개수가 맞지 않으면 빈 배열.
-    private func planRowOrigins(_ expected: Int) -> [Int] {
-        var out: [Int] = []
-        for (i, p) in plans.enumerated() { out += Array(repeating: i, count: p.rows.count) }
-        return out.count == expected ? out : []
-    }
 
     /// 중복으로 보이는 행들을 **사용자가 눌렀을 때만** 지운다. 되살리기도 한 번에.
     private func deleteDuplicateRows() {
@@ -4787,19 +4782,7 @@ struct ContentView: View {
         scheduleSave()
     }
 
-    /// 행 하나의 이름표 — 키 값이 있으면 그것, 없으면 Code·이메일, 그것도 없으면 행 번호.
-    private func rowLabel(_ row: ApplicantRow, at i: Int) -> String {
-        for col in [keyColumn, .code, .email].compactMap({ $0 }) {
-            let v = row[col].trimmingCharacters(in: .whitespacesAndNewlines)
-            if !v.isEmpty { return col.rawValue + "\u{1}" + v.lowercased() }
-        }
-        return "행 \(i + 1)"
-    }
 
-    private func sendRowKeys(_ rows: [ApplicantRow]) {
-        preview.rowKeys = rows.enumerated().map { rowLabel($1, at: $0) }
-        preview.confirmedRows = confirmedRowKeys
-    }
 
     /// 첫 화면에서 보이던 표시(쪼개진 컬럼·짝 후보·지금 보는 컬럼)를 미리보기 창으로 넘긴다.
     private func sendColumnMarks() {
@@ -4820,16 +4803,6 @@ struct ContentView: View {
     }
 
     /// 지금 선택·결정 상태로 기존본을 덮어쓴 결과를 만든다.
-    private func buildPatch(base: BaseSheet,
-                            rows: [ApplicantRow], generatedCodes: Set<String>) -> PatchResult {
-        PatchEngine.apply(base: base,
-                          merged: rows,
-                          generatedCodes: generatedCodes,
-                          columns: focusOrdered,
-                          appendNewRows: appendNewRows,
-                          markNewRows: markNewRows,
-                          match: rowMatch)
-    }
 
     /// 이번에 정제하기로 한 컬럼 — 결과물의 컬럼 순서대로.
     /// 고르지 않았어도 ‘정해 둔 규칙대로 다듬을 수 있는’ 컬럼은 함께 채운다
@@ -4837,88 +4810,6 @@ struct ContentView: View {
     private var focusOrdered: [UnifiedColumn] {
         let auto = autoFillSettled ? Set(autoEditableColumns) : []
         return allColumns.filter { focusColumns.contains($0) || auto.contains($0) }
-    }
-
-    /// 부분 정제 모드의 미리보기: 기존본 그대로에, 이번 결정이 바꾸는 셀만 표시된다.
-    /// 비교 기준(baseline)이 손대기 전 기존본이라, 파란 셀이 곧 ‘이번 작업의 변경분’이다.
-    private func refreshPatchPreview(base: BaseSheet, rows sourceRows: [ApplicantRow],
-                                     generatedCodes: Set<String>, origins mergedOrigins: [Int] = []) {
-        let p = buildPatch(base: base, rows: sourceRows, generatedCodes: generatedCodes)
-
-        var columnHeader = base.columnHeader
-        for c in p.addedColumns { columnHeader[c] = c.rawValue }
-        func toRow(_ r: [String: String]) -> ApplicantRow {
-            var out = ApplicantRow()
-            for (col, h) in columnHeader { out[col] = r[h] ?? "" }
-            return out
-        }
-
-        var cols = base.columns
-        for c in p.addedColumns where !cols.contains(c) { cols.append(c) }
-
-        let baseline = base.rows.map { base.applicantRow($0) }
-        let rows = p.rows.map(toRow)
-
-        var diff: [Int: Set<UnifiedColumn>] = [:]
-        var n = 0
-        for (i, row) in rows.enumerated() {
-            if i < baseline.count {
-                for c in cols where row[c] != baseline[i][c] {
-                    diff[i, default: []].insert(c); n += 1
-                }
-            } else {
-                // 새로 붙인 행: 이번에 채운 컬럼을 표시해 눈에 띄게 한다.
-                for c in p.columns where !row[c].isEmpty {
-                    diff[i, default: []].insert(c); n += 1
-                }
-            }
-        }
-
-        var opens: [UnifiedColumn: Int] = [:]
-        var relevant: Set<UnifiedColumn> = []
-        // 컬럼을 아직 안 골랐어도(첫 화면) 색이 보이도록 전체 리뷰로 계산한다.
-        for r in reviews {
-            if isDecisionRelevant(r) { relevant.insert(r.column) }
-            let open = openCount(r)
-            if open > 0 { opens[r.column] = open }
-        }
-
-        // 행마다 어느 파일에서 온 값인지 — 큰 미리보기 창에서도 파일 색을 유지한다.
-        // 사용자가 고른 틀에 이어붙이는 중이면, 그 줄에 값을 넣어 준 파일의 색을 쓴다
-        // (짝을 못 찾아 기존 값 그대로인 줄은 -1 = 틀 색).
-        var origins: [Int] = []
-        if !p.sourceRows.isEmpty, !mergedOrigins.isEmpty {
-            origins = p.sourceRows.enumerated().map { i, m in
-                if m >= 0, m < mergedOrigins.count { return mergedOrigins[m] }
-                // 새 데이터와 짝이 없더라도, 기준선이 아는 출처가 있으면 그걸 쓴다.
-                return i < base.rowOrigins.count ? base.rowOrigins[i] : -1
-            }
-        }
-        if origins.isEmpty {
-            origins = base.rowOrigins.count == base.rows.count ? base.rowOrigins : []
-            // 기준선이 오래돼 출처가 없으면(예전 세션) 올린 파일들의 행 수로 다시 만든다.
-            if origins.isEmpty, !baseIsUserFile { origins = planRowOrigins(base.rows.count) }
-            if !origins.isEmpty {
-                while origins.count < rows.count { origins.append(-1) }   // 새로 붙인 행
-            }
-        }
-        preview.rowFiles = origins
-        preview.baseName = baseIsUserFile ? base.name : ""
-        preview.newRows = p.newRowIndices
-        preview.duplicateRows = base.duplicateRows
-        preview.duplicateOf = base.duplicateOf
-        sendRowKeys(rows)
-        preview.fileNames = plans.map(\.fileName)
-        sendColumnMarks()
-
-        preview.baselineRows = baseline
-        preview.rows = rows
-        preview.diff = diff
-        preview.diffCount = n
-        preview.columns = cols
-        preview.checked = checked
-        preview.openCounts = opens
-        preview.decisionColumns = relevant
     }
 
     private func toggleAll() {
@@ -7250,6 +7141,24 @@ final class PreviewModel: ObservableObject {
     @Published var duplicateOf: [Int: Int] = [:]
     /// 창을 열 때 중복만 보여 줄지.
     @Published var showDuplicatesOnly = false
+    /// 지금 결과를 다시 만드는 중인가 (백그라운드).
+    @Published var isBuilding = false
+
+    /// 백그라운드에서 만들어 온 결과를 한 번에 반영한다.
+    func apply(_ p: PreviewPayload) {
+        rows = p.rows
+        if !p.baselineRows.isEmpty { baselineRows = p.baselineRows }
+        diff = p.diff
+        diffCount = p.diffCount
+        columns = p.columns
+        rowFiles = p.rowFiles
+        rowKeys = p.rowKeys
+        newRows = p.newRows
+        duplicateRows = p.duplicateRows
+        duplicateOf = p.duplicateOf
+        baseName = p.baseName
+        isBuilding = false
+    }
 
     func rowKey(_ i: Int) -> String { i < rowKeys.count ? rowKeys[i] : "행 \(i + 1)" }
     func isConfirmed(_ i: Int) -> Bool { confirmedRows.contains(rowKey(i)) }
@@ -7519,9 +7428,8 @@ struct PreviewWindowView: View {
     @State private var query = ""
     @State private var improvedOnly = false
     @State private var unconfirmedOnly = false
-    /// 중복 짝으로 데려갈 행, 그리고 잠깐 비춰 줄 행.
-    @State private var jumpTarget: Int?
-    @State private var flashRow: Int?
+    /// 눌러서 데려갈 컬럼 (표를 가로로 스크롤한다).
+    @State private var jumpColumn: String?
     /// 값을 고치는 중인 셀 (컬럼 · 지금 값).
     struct EditTarget: Identifiable {
         let column: UnifiedColumn
@@ -7603,6 +7511,12 @@ struct PreviewWindowView: View {
                 .help("아직 결정하지 못한 값이 남은 컬럼: "
                       + model.needsWorkColumns.map(\.rawValue).joined(separator: ", "))
         }
+        if model.isBuilding {
+            HStack(spacing: 5) {
+                ProgressView().controlSize(.small)
+                Text("결과를 다시 만드는 중…").font(.body).foregroundStyle(.secondary)
+            }
+        }
         if !model.confirmedRows.isEmpty {
             Label("확정 \(model.confirmedRows.count) / \(model.rows.count)행",
                   systemImage: "checkmark.seal.fill")
@@ -7621,13 +7535,16 @@ struct PreviewWindowView: View {
                 .help("합쳐진 행이 어느 파일에서 왔는지 정보가 없습니다. 파일을 다시 올리면 표시됩니다.")
         }
         if let f = model.focused {
-            Label("보는 중: \(f.rawValue)", systemImage: "eye.fill")
-                .font(.body.weight(.medium))
-                .foregroundStyle(Color.accentColor)
-                .lineLimit(1)
-                .padding(.horizontal, 8).padding(.vertical, 3)
-                .background(Capsule().fill(Color.accentColor.opacity(0.14)))
-                .help("표에서 파란 기둥으로 표시된 컬럼입니다.")
+            Button { jumpColumn = f.rawValue } label: {
+                Text("보는 중: \(f.rawValue)")
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(Color.accentColor)
+                    .lineLimit(1)
+                    .padding(.horizontal, 8).padding(.vertical, 3)
+                    .background(Capsule().fill(Color.accentColor.opacity(0.14)))
+            }
+            .buttonStyle(.plain)
+            .help("눌러서 그 컬럼으로 갑니다 (표에서 파란 기둥).")
         }
     }
 
@@ -7688,10 +7605,8 @@ struct PreviewWindowView: View {
                                         bodyCell(c, row: row, at: i)
                                     }
                                 }
-                                .background(flashRow == i ? Color.yellow.opacity(0.35) : .clear)
                                 .background(model.isConfirmed(i) ? Color.green.opacity(0.10) : .clear)
                                 .background(showColors ? (model.fileTint(row: i)?.opacity(0.14) ?? .clear) : .clear)
-                                .id(i)
                                 Divider()
                             }
                         } header: {
@@ -7702,22 +7617,17 @@ struct PreviewWindowView: View {
                                     .padding(.horizontal, 8).padding(.vertical, 6)
                                 ForEach(Array(model.columns.enumerated()), id: \.element) { idx, c in
                                     headerCell(c, number: idx + 1)
+                                        .id("col:" + c.rawValue)
                                 }
                             }
                             .background(Color(nsColor: .underPageBackgroundColor))
                         }
                     }
                 }
-                .onChange(of: jumpTarget) { target in
-                    guard let target else { return }
-                    // 중복 짝을 눌렀을 때 그 행으로 데려가고 잠깐 노랗게 비춘다.
-                    if model.showDuplicatesOnly { model.showDuplicatesOnly = false }
-                    withAnimation { proxy.scrollTo(target, anchor: .center) }
-                    flashRow = target
-                    jumpTarget = nil
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                        if flashRow == target { flashRow = nil }
-                    }
+                .onChange(of: jumpColumn) { name in
+                    guard let name else { return }
+                    withAnimation { proxy.scrollTo("col:" + name, anchor: .center) }
+                    jumpColumn = nil
                 }
                 }
                 Divider()
@@ -7869,19 +7779,13 @@ struct PreviewWindowView: View {
                     .frame(width: 3, height: 14)
                 if model.duplicateRows.contains(i) {
                 let twin = model.duplicateOf[i]
-                Button {
-                    if let twin { jumpTarget = twin }
-                } label: {
-                    Text(twin.map { "중복 ↑\($0 + 1)행" } ?? "중복")
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(.orange)
-                        .padding(.horizontal, 5).padding(.vertical, 1)
-                        .background(Capsule().fill(Color.orange.opacity(0.16)))
-                }
-                .buttonStyle(.plain)
-                .disabled(twin == nil)
-                .help(twin.map { "\($0 + 1)행과 같은 사람으로 보입니다 — 눌러서 그 행으로 갑니다." }
-                      ?? "앞줄에 같은 사람이 있습니다.")
+                Text(twin.map { "\($0 + 1)행과 중복" } ?? "중복")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.orange)
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .background(Capsule().fill(Color.orange.opacity(0.16)))
+                    .help(twin.map { "\($0 + 1)행과 같은 사람으로 보입니다." }
+                          ?? "앞줄에 같은 사람이 있습니다.")
             }
             if let badge = model.rowBadge(row: i) {
                     Text(badge)

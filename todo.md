@@ -823,3 +823,17 @@
 - [x] 셀을 **더블클릭**하면 값 고치기 창 (오른쪽 클릭 메뉴와 같은 동작)
 - [x] 빈 칸도 더블클릭 가능 — `‘도시’ 빈 칸 채우기` / `이 컬럼에서 비어 있는 24행이
       모두 이 값으로 채워집니다`
+
+## 무지개 커서(앱이 죽은 것처럼 보이는 것) 없애기
+- [x] 미리보기 만들기를 **백그라운드로** 옮김 — `PreviewInput`/`PreviewPayload`/`PreviewBuilder`
+      (BaseSheet.swift). 값 통일 적용 → 결과물 만들기 → 바뀐 셀 찾기까지 전부 순수 계산이라
+      스레드를 가리지 않는다. 끝나면 메인에서 `PreviewModel.apply(_:)`로 한 번에 반영
+- [x] `previewToken` — 늦게 끝난 옛 계산이 새 결과를 덮지 않게
+- [x] 상태 의존 계산(컬럼 상태·색·뱃지)은 메인에서 먼저 → 색은 즉시, 행은 곧 따라온다
+- [x] 미리보기 창에 `결과를 다시 만드는 중…` 표시 (`PreviewModel.isBuilding`)
+- [x] 옛 `refreshPatchPreview`/`buildPatch`/`sendRowKeys`/`planRowOrigins`/`rowLabel` 제거
+      (전부 `PreviewBuilder`로 옮겨감)
+
+## 중복 표시·컬럼 이동 다듬기
+- [x] 중복은 **표시만** — `12행과 중복` (누르는 버튼 아님)
+- [x] `보는 중: 도시` 칩이 **그 컬럼으로 가로 스크롤**하는 버튼이 되고, 눈 모양 심볼 제거

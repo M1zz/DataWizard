@@ -560,3 +560,161 @@ enum ValueApplier {
         return (out, changes)
     }
 }
+
+// MARK: - 미리보기 만들기 (백그라운드)
+
+/// 미리보기를 만드는 데 필요한 입력 — 전부 값 타입이라 백그라운드로 그대로 넘길 수 있다.
+struct PreviewInput {
+    var plans: [FilePlan]
+    var valueMap: [UnifiedColumn: [String: String]]
+    var phoneTemplate: String
+    var codePattern: KeyPattern
+    var isUtility: Bool
+    var base: BaseSheet?
+    var baseIsUserFile: Bool
+    var patchColumns: [UnifiedColumn]
+    var appendNewRows: Bool
+    var markNewRows: Bool
+    var match: RowMatch
+    var visibleColumns: [UnifiedColumn]
+    var keyColumn: UnifiedColumn?
+    var needsBaseline: Bool
+}
+
+/// 만들어진 결과 — 메인 스레드에서 한 번에 반영한다.
+struct PreviewPayload {
+    var rows: [ApplicantRow] = []
+    var baselineRows: [ApplicantRow] = []
+    var diff: [Int: Set<UnifiedColumn>] = [:]
+    var diffCount = 0
+    var columns: [UnifiedColumn] = []
+    var rowFiles: [Int] = []
+    var rowKeys: [String] = []
+    var newRows: Set<Int> = []
+    var duplicateRows: Set<Int> = []
+    var duplicateOf: [Int: Int] = [:]
+    var baseName = ""
+}
+
+/// 값 통일 → 결과물 만들기 → 바뀐 셀 찾기. 전부 순수 계산이라 어느 스레드에서든 돌릴 수 있다.
+enum PreviewBuilder {
+
+    static func build(_ input: PreviewInput) -> PreviewPayload {
+        // 1) 지금 결정대로 값을 적용한 행들
+        var applied: [ApplicantRow] = []
+        var origins: [Int] = []
+        var generatedCodes = Set<String>()
+        if input.isUtility {
+            let r = ValueApplier.run(plans: input.plans, valueMap: input.valueMap)
+            applied = r.rows
+            var o: [Int] = []
+            for (i, p) in input.plans.enumerated() { o += Array(repeating: i, count: p.rows.count) }
+            origins = o.count == applied.count ? o : []
+        } else {
+            let r = try? MergeEngine(plans: input.plans, valueMap: input.valueMap,
+                                     codePattern: input.codePattern,
+                                     phoneTemplate: input.phoneTemplate).run()
+            applied = r?.rows ?? []
+            origins = r?.origins ?? []
+            generatedCodes = r?.generatedCodes ?? []
+        }
+
+        guard let base = input.base else {
+            return plainPayload(input, rows: applied, origins: origins)
+        }
+        return patchPayload(input, base: base, rows: applied,
+                            origins: origins, generatedCodes: generatedCodes)
+    }
+
+    /// 기준선 없이 ‘합쳐진 새 파일’을 보여 주는 경우.
+    private static func plainPayload(_ input: PreviewInput,
+                                     rows: [ApplicantRow], origins: [Int]) -> PreviewPayload {
+        var out = PreviewPayload()
+        out.rows = rows
+        out.columns = input.visibleColumns
+        out.rowFiles = origins
+        out.rowKeys = rows.enumerated().map { rowLabel($1, at: $0, key: input.keyColumn) }
+        if input.needsBaseline {
+            let raw = MergeEngine(plans: input.plans, valueMap: [:],
+                                  codePattern: input.codePattern,
+                                  phoneTemplate: Normalizer.defaultPhoneTemplate)
+            out.baselineRows = (try? raw.run())?.rows ?? []
+        }
+        let baseline = out.baselineRows
+        if !baseline.isEmpty {
+            for (i, row) in rows.enumerated() where i < baseline.count {
+                for c in input.visibleColumns where row[c] != baseline[i][c] {
+                    out.diff[i, default: []].insert(c)
+                    out.diffCount += 1
+                }
+            }
+        }
+        return out
+    }
+
+    /// 기준선(올린 파일을 쌓은 시트 또는 사용자가 고른 틀)에 값을 덮어쓴 결과.
+    private static func patchPayload(_ input: PreviewInput, base: BaseSheet,
+                                     rows: [ApplicantRow], origins: [Int],
+                                     generatedCodes: Set<String>) -> PreviewPayload {
+        let p = PatchEngine.apply(base: base, merged: rows, generatedCodes: generatedCodes,
+                                  columns: input.patchColumns,
+                                  appendNewRows: input.appendNewRows,
+                                  markNewRows: input.markNewRows,
+                                  match: input.match)
+
+        var columnHeader = base.columnHeader
+        for c in p.addedColumns { columnHeader[c] = c.rawValue }
+        func toRow(_ r: [String: String]) -> ApplicantRow {
+            var out = ApplicantRow()
+            for (col, h) in columnHeader { out[col] = r[h] ?? "" }
+            return out
+        }
+
+        var cols = base.columns
+        for c in p.addedColumns where !cols.contains(c) { cols.append(c) }
+
+        var out = PreviewPayload()
+        out.baselineRows = base.rows.map { base.applicantRow($0) }
+        out.rows = p.rows.map(toRow)
+        out.columns = cols
+        out.newRows = p.newRowIndices
+        out.duplicateRows = base.duplicateRows
+        out.duplicateOf = base.duplicateOf
+        out.baseName = input.baseIsUserFile ? base.name : ""
+        out.rowKeys = out.rows.enumerated().map { rowLabel($1, at: $0, key: input.keyColumn) }
+
+        // 행마다 어느 파일에서 온 값인지
+        if !p.sourceRows.isEmpty {
+            out.rowFiles = p.sourceRows.enumerated().map { i, m in
+                if m >= 0, m < origins.count { return origins[m] }
+                return i < base.rowOrigins.count ? base.rowOrigins[i] : -1
+            }
+        } else if base.rowOrigins.count == base.rows.count {
+            out.rowFiles = base.rowOrigins
+        }
+
+        // 바뀐 셀 (기존본과 비교)
+        let baseline = out.baselineRows
+        for (i, row) in out.rows.enumerated() {
+            if i < baseline.count {
+                for c in cols where row[c] != baseline[i][c] {
+                    out.diff[i, default: []].insert(c); out.diffCount += 1
+                }
+            } else {
+                for c in p.columns where !row[c].isEmpty {
+                    out.diff[i, default: []].insert(c); out.diffCount += 1
+                }
+            }
+        }
+        return out
+    }
+
+    /// 행 이름표 — 키 값이 있으면 그것, 없으면 Code·이메일, 그것도 없으면 행 번호.
+    private static func rowLabel(_ row: ApplicantRow, at i: Int, key: UnifiedColumn?) -> String {
+        for col in [key, .code, .email].compactMap({ $0 }) {
+            let v = row[col].trimmingCharacters(in: .whitespacesAndNewlines)
+            if !v.isEmpty { return col.rawValue + "\u{1}" + v.lowercased() }
+        }
+        return "행 \(i + 1)"
+    }
+}
