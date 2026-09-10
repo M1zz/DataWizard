@@ -71,6 +71,8 @@ struct ContentView: View {
     @State private var showAllColumns = false
     /// 지금 제안하고 있는 컬럼의 순서 (할 일이 적은 것부터).
     @State private var proposalIndex = 0
+    /// 합치기 단계에서 사람이 확인을 마친 항목들 (한 번에 하나씩 보여 주기 위해).
+    @State private var mergeDone: Set<String> = []
     /// 손댈 것 없는 컬럼 중 자동으로 다듬을 수 있는 것도 결과에 채울지.
     @State private var autoFillSettled = true
     /// ‘그대로 완성되는 컬럼’ 이름을 모두 펼쳐 볼지.
@@ -1063,70 +1065,106 @@ struct ContentView: View {
         }
     }
 
+    /// 합치기 단계에서 사람이 한 번씩 확인해야 하는 일 하나.
+    struct MergeStep: Identifiable {
+        let id: String
+        let symbol: String
+        let tint: Color
+        let title: String
+        let detail: String
+        var actionTitle: String? = nil
+        var action: (() -> Void)? = nil
+    }
+
+    /// 지금 남아 있는 합치기 할 일들 — 확인한 것은 빠진다.
+    private var mergeSteps: [MergeStep] {
+        guard plans.count > 1 || baseIsUserFile else { return [] }
+        var out: [MergeStep] = []
+
+        if !autoMatched.isEmpty {
+            let names = autoMatched.prefix(4)
+                .map { "\($0.source.rawValue) → \($0.target.rawValue)" }
+                .joined(separator: "\n")
+            out.append(MergeStep(
+                id: "auto",
+                symbol: "wand.and.stars", tint: .accentColor,
+                title: "자동으로 채운 컬럼 \(autoMatched.count)개",
+                detail: "값이 같아 보여서 이렇게 이어 붙였어요. 맞으면 그대로 두세요.\n" + names
+                    + (autoMatched.count > 4 ? "\n…" : ""),
+                actionTitle: "되돌리기", action: { undoAutoMatch() }))
+        }
+        if !matchSuggestions.isEmpty {
+            out.append(MergeStep(
+                id: "pairs",
+                symbol: "arrow.trianglehead.merge", tint: .accentColor,
+                title: "이름이 다른 같은 컬럼 \(matchSuggestions.count)건",
+                detail: matchSummary + "\n같은 컬럼이면 한 칸으로 합치고, 아니면 그대로 두면 됩니다.",
+                actionTitle: "짝지어 주기…", action: { showMatchSheet = true }))
+        }
+        for col in shapeConflicts {
+            out.append(MergeStep(
+                id: "shape:" + col.rawValue,
+                symbol: "exclamationmark.triangle.fill", tint: .orange,
+                title: "‘\(col.rawValue)’는 파일마다 값 모양이 달라요",
+                detail: "합치는 데는 문제없지만, 한 형식으로 맞추지 않으면 결과에 두 가지 표기가 섞입니다.",
+                actionTitle: "‘\(col.rawValue)’ 정리하기", action: {
+                    focusColumns = [col]
+                    startWork()
+                }))
+        }
+        let paired = Set(matchSuggestions.map(\.source))
+            .union(matchSuggestions.compactMap { $0.best?.column })
+        let partial = finalColumns.filter {
+            let n = filesHaving($0)
+            return n > 0 && n < plans.count && !paired.contains($0)
+        }
+        if !partial.isEmpty {
+            out.append(MergeStep(
+                id: "partial",
+                symbol: "square.dashed", tint: .secondary,
+                title: "한 파일에만 있는 컬럼 \(partial.count)개",
+                detail: partial.prefix(6).map(\.rawValue).joined(separator: " · ")
+                    + (partial.count > 6 ? " 외" : "")
+                    + "\n그 컬럼이 없는 파일의 행은 빈칸으로 남습니다. 원래 그런 거라면 그냥 넘어가세요."))
+        }
+        return out.filter { !mergeDone.contains($0.id) }
+    }
+
     /// 이 앱이 하는 두 가지 일 중 첫 번째 — **합치기**.
-    /// 파일을 세로로 쌓을 때 컬럼이 제자리에 들어가는지만 본다.
-    /// 값이 어떻게 생겼는지(포맷·오타)는 2단계에서 다룬다.
+    /// 할 일이 여럿이면 한 번에 하나씩만 보여 준다 (2단계 정리와 같은 방식).
     @ViewBuilder
     private var workMergeCard: some View {
         if plans.count > 1 || baseIsUserFile {
+            let steps = mergeSteps
             let common = finalColumns.filter { filesHaving($0) == plans.count }
-            let paired = Set(matchSuggestions.map(\.source))
-                .union(matchSuggestions.compactMap { $0.best?.column })
-            let partial = finalColumns.filter {
-                let n = filesHaving($0)
-                return n > 0 && n < plans.count && !paired.contains($0)
-            }
             let rows = plans.reduce(0) { $0 + $1.rows.count }
-            let clean = matchSuggestions.isEmpty && partial.isEmpty && shapeConflicts.isEmpty
-                && autoMatched.isEmpty
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text("1. 합치기")
-                        .font(.headline)
-                    Text("파일 \(plans.count)개를 세로로 쌓아 \(rows)행 · 컬럼 \(finalColumns.count)개")
-                        .font(.body).foregroundStyle(.secondary)
-                    Spacer()
-                    if clean {
-                        Label("충돌 없음", systemImage: "checkmark.seal.fill")
-                            .font(.body.weight(.semibold)).foregroundStyle(.green)
-                    }
-                }
-                if clean {
-                    Text("같은 이름의 컬럼은 한 칸으로 겹치고, 없는 컬럼은 빈칸으로 둡니다. 합치기는 끝났고 남은 일은 값 정리뿐이에요.")
+                    Text("1. 합치기").font(.headline)
+                    Text("파일 \(plans.count)개를 세로로 쌓아 \(rows)행 · 컬럼 \(finalColumns.count)개"
+                         + (common.isEmpty ? "" : " · 공통 컬럼 \(common.count)개는 그대로 겹침"))
                         .font(.body).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                    if steps.isEmpty {
+                        Label("확인할 것 없음", systemImage: "checkmark.seal.fill")
+                            .font(.body.weight(.semibold)).foregroundStyle(.green)
+                    } else {
+                        Text("확인할 일 \(steps.count)개 중 1번째")
+                            .font(.body).monospacedDigit().foregroundStyle(.secondary)
+                    }
+                }
+                if let step = steps.first {
+                    mergeStepCard(step, remaining: steps.count)
                 } else {
-                    if !common.isEmpty {
-                        mergeLine("checkmark.circle.fill", .green,
-                                  "공통 컬럼 \(common.count)개는 그대로 겹쳐집니다", nil, nil)
-                    }
-                    if !autoMatched.isEmpty {
-                        mergeLine("wand.and.stars", .accentColor,
-                                  "자동으로 채운 컬럼 \(autoMatched.count)개 — "
-                                  + autoMatched.prefix(3)
-                                      .map { "\($0.source.rawValue) → \($0.target.rawValue)" }
-                                      .joined(separator: " · ")
-                                  + (autoMatched.count > 3 ? " 외" : ""),
-                                  "되돌리기") { undoAutoMatch() }
-                    }
-                    if !matchSuggestions.isEmpty {
-                        mergeLine("arrow.trianglehead.merge", .accentColor,
-                                  "이름이 다른 같은 컬럼 \(matchSuggestions.count)건 — \(matchSummary)",
-                                  "짝지어 주기…") { showMatchSheet = true }
-                    }
-                    if !partial.isEmpty {
-                        mergeLine("square.dashed", .secondary,
-                                  "한 파일에만 있는 컬럼 \(partial.count)개 — 없는 파일의 행은 빈칸으로 남습니다 ("
-                                  + partial.prefix(4).map(\.rawValue).joined(separator: " · ")
-                                  + (partial.count > 4 ? " 외" : "") + ")", nil, nil)
-                    }
-                    if let conflict = shapeConflicts.first {
-                        mergeLine("exclamationmark.triangle.fill", .orange,
-                                  "파일마다 값 모양이 다른 컬럼 \(shapeConflicts.count)개 — 합치는 데는 문제없고, 2단계에서 한 형식으로 맞추면 됩니다 ("
-                                  + shapeConflicts.prefix(3).map(\.rawValue).joined(separator: " · ") + ")",
-                                  "‘\(conflict.rawValue)’ 정리하기") {
-                            focusColumns = [conflict]
-                            startWork()
+                    HStack(spacing: 8) {
+                        Text("같은 이름의 컬럼은 한 칸으로 겹치고, 없는 컬럼은 빈칸으로 둡니다. 합치기는 끝났고 남은 일은 값 정리뿐이에요.")
+                            .font(.body).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 8)
+                        if !mergeDone.isEmpty {
+                            Button("확인한 것 다시 보기") { mergeDone = [] }
+                                .controlSize(.small)
                         }
                     }
                 }
@@ -1134,23 +1172,50 @@ struct ContentView: View {
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(clean ? Color.green.opacity(0.07) : Color.primary.opacity(0.04)))
+                .fill(steps.isEmpty ? Color.green.opacity(0.07) : Color.primary.opacity(0.04)))
         }
     }
 
-    private func mergeLine(_ symbol: String, _ tint: Color, _ text: String,
-                           _ actionTitle: String?, _ action: (() -> Void)?) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: symbol).foregroundStyle(tint).font(.body)
-                .frame(width: 14)
-            Text(text)
-                .font(.body).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 8)
-            if let actionTitle, let action {
-                Button(actionTitle, action: action).controlSize(.small)
+    /// 합치기 할 일 한 장 — 무엇을, 왜, 그리고 어떻게 넘어가는지.
+    private func mergeStepCard(_ step: MergeStep, remaining: Int) -> some View {
+        let border: Color = step.tint.opacity(0.35)
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: step.symbol)
+                    .foregroundStyle(step.tint)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(step.title)
+                        .font(.body.weight(.semibold))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(step.detail)
+                        .font(.body).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+            }
+            HStack(spacing: 10) {
+                if let title = step.actionTitle, let action = step.action {
+                    Button(action: action) { Text(title).fontWeight(.semibold) }
+                        .buttonStyle(.borderedProminent)
+                }
+                Button(step.actionTitle == nil ? "알겠어요" : "이대로 둘게요") {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        _ = mergeDone.insert(step.id)
+                    }
+                }
+                Spacer()
+                if remaining > 1 {
+                    Text("확인하면 다음 것을 보여 드려요")
+                        .font(.body).foregroundStyle(.secondary)
+                }
             }
         }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(Color(nsColor: .controlBackgroundColor)))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .stroke(border, lineWidth: 1))
     }
 
     private var matchSummary: String {
@@ -3582,6 +3647,7 @@ struct ContentView: View {
         showSettledColumns = false
         showAllColumns = false
         proposalIndex = 0
+        mergeDone = []
         refreshMatches()
         // 틀이 있으면, 채울 수 있는 컬럼은 묻지 않고 바로 채운다.
         if !templateColumns.isEmpty { autoMatchTemplateColumns() }
