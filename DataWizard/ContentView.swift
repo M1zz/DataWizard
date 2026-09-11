@@ -226,23 +226,6 @@ struct ContentView: View {
         .frame(minWidth: 820, minHeight: 580)
         .background(Color(nsColor: .windowBackgroundColor))
         .overlay { if busyNote != nil { loadingOverlay } }
-        .sheet(isPresented: Binding(get: { confirmMerge != nil },
-                                    set: { if !$0 { confirmMerge = nil } })) {
-            mergeConfirmSheet
-        }
-        .sheet(isPresented: $showFilterSheet) { rowFilterSheet }
-        .sheet(isPresented: Binding(get: { generateColumn != nil },
-                                    set: { if !$0 { generateColumn = nil } })) { generateSheet }
-        .sheet(isPresented: Binding(get: { fillTarget != nil },
-                                    set: { if !$0 { fillTarget = nil } })) { fillSheet }
-        .sheet(isPresented: Binding(get: { !fillFromSelection.isEmpty },
-                                    set: { if !$0 { fillFromSelection = [] } })) { fillFromSheet }
-        .sheet(isPresented: Binding(get: { moveSource != nil },
-                                    set: { if !$0 { moveSource = nil } })) { moveSheet }
-        .sheet(isPresented: Binding(get: { changePreviewColumn != nil },
-                                    set: { if !$0 { changePreviewColumn = nil } })) {
-            changePreviewSheet
-        }
         .confirmationDialog("지금까지의 작업을 지우고 새로 시작할까요?",
                             isPresented: $confirmStartOver, titleVisibility: .visible) {
             Button("새로 시작", role: .destructive) { startOver() }
@@ -251,50 +234,11 @@ struct ContentView: View {
             Text("올린 파일과 지금까지 정한 것(틀·키·채운 칸·정리한 값)이 전부 지워집니다. "
                  + "되돌릴 수 없어요.")
         }
-        .sheet(item: $filePreview) { plan in
-            FilePreviewSheet(plan: plan,
-                             tint: fileTint(plans.firstIndex(where: { $0.id == plan.id }) ?? 0),
-                             onClose: { filePreview = nil })
-        }
-        .sheet(item: $detailColumn) { col in detailSheet(col) }
-        .sheet(item: $configColumn) { col in
-            ColumnSourceSheet(column: col, plans: $plans, onClose: {
-                configColumn = nil
-                // 어느 칸을 쓸지 바뀌었으니 컬럼·값·미리보기를 다시 만든다.
-                if stage == .work { rebuildWorkColumns() }
-            })
-        }
-        .sheet(item: $exampleColumn) { col in
-            ExampleRuleSheet(column: col,
-                             values: ValueScanner.distinct(col, in: plans),
-                             mapping: bindingForColumn(col),
-                             onClose: { exampleColumn = nil })
-        }
-        .sheet(item: $regexColumn) { col in
-            // Cleanup is value-based, so aggregate across files (one row per value).
-            RegexCleanupSheet(column: col,
-                              values: ValueScanner.distinct(col, in: plans),
-                              mapping: bindingForColumn(col),
-                              onClose: { regexColumn = nil })
-        }
-        .sheet(item: $mappingColumn) { col in
-            MappingTableSheet(column: col,
-                              values: ValueScanner.distinct(col, in: plans),
-                              mapping: bindingForColumn(col),
-                              allowed: Binding(get: { allowedValues[col] ?? [] },
-                                               set: { allowedValues[col] = $0 }),
-                              onClose: { mappingColumn = nil })
-        }
-        .sheet(isPresented: $showMatchSheet) {
-            ColumnMatchSheet(baseName: base?.name ?? "",
-                             suggestions: matchSuggestions,
-                             sourceSamples: matchSamples,
-                             targetSamples: matchSamples,
-                             onApply: { pairs in
-                                 showMatchSheet = false
-                                 withBusy("컬럼을 합치는 중…") { applyMatches(pairs) }
-                             },
-                             onClose: { showMatchSheet = false })
+        // 창은 **하나로 모아 둔다** — `.sheet`를 여러 개 겹쳐 달면
+        // 뒤에 단 것이 조용히 안 뜬다 (‘눌러도 아무 반응이 없다’의 원인).
+        .sheet(item: Binding(get: { activeSheet },
+                             set: { if $0 == nil { closeSheets() } })) { kind in
+            sheetContent(kind)
         }
         // 이전 세션이 있으면 파일 화면에서 이어서 하기를 제안.
         .onAppear {
@@ -326,6 +270,101 @@ struct ContentView: View {
 
         // 창을 내리거나 앱을 벗어나는 순간 즉시 저장.
 
+    }
+
+    /// 한 번에 하나만 뜨는 창들. 어느 것을 띄울지는 이 순서로 정한다.
+    private enum SheetKind: Int, Identifiable {
+        case merge, filter, generate, fill, fillFrom, move, changes
+        case filePreview, detail, config, example, regex, mapping, match
+        var id: Int { rawValue }
+    }
+
+    private var activeSheet: SheetKind? {
+        if confirmMerge != nil { return .merge }
+        if showFilterSheet { return .filter }
+        if generateColumn != nil { return .generate }
+        if fillTarget != nil { return .fill }
+        if !fillFromSelection.isEmpty { return .fillFrom }
+        if moveSource != nil { return .move }
+        if changePreviewColumn != nil { return .changes }
+        if filePreview != nil { return .filePreview }
+        if detailColumn != nil { return .detail }
+        if configColumn != nil { return .config }
+        if exampleColumn != nil { return .example }
+        if regexColumn != nil { return .regex }
+        if mappingColumn != nil { return .mapping }
+        if showMatchSheet { return .match }
+        return nil
+    }
+
+    private func closeSheets() {
+        confirmMerge = nil; showFilterSheet = false; generateColumn = nil
+        fillTarget = nil; fillFromSelection = []; moveSource = nil
+        changePreviewColumn = nil; filePreview = nil; detailColumn = nil
+        configColumn = nil; exampleColumn = nil; regexColumn = nil
+        mappingColumn = nil; showMatchSheet = false
+    }
+
+    @ViewBuilder
+    private func sheetContent(_ kind: SheetKind) -> some View {
+        switch kind {
+        case .merge:    mergeConfirmSheet
+        case .filter:   rowFilterSheet
+        case .generate: generateSheet
+        case .fill:     fillSheet
+        case .fillFrom: fillFromSheet
+        case .move:     moveSheet
+        case .changes:  changePreviewSheet
+        case .filePreview:
+            if let plan = filePreview {
+                FilePreviewSheet(plan: plan,
+                                 tint: fileTint(plans.firstIndex(where: { $0.id == plan.id }) ?? 0),
+                                 onClose: { filePreview = nil })
+            }
+        case .detail:
+            if let col = detailColumn { detailSheet(col) }
+        case .config:
+            if let col = configColumn {
+                ColumnSourceSheet(column: col, plans: $plans, onClose: {
+                    configColumn = nil
+                    // 어느 칸을 쓸지 바뀌었으니 컬럼·값·미리보기를 다시 만든다.
+                    if stage == .work { rebuildWorkColumns() }
+                })
+            }
+        case .example:
+            if let col = exampleColumn {
+                ExampleRuleSheet(column: col,
+                                 values: ValueScanner.distinct(col, in: plans),
+                                 mapping: bindingForColumn(col),
+                                 onClose: { exampleColumn = nil })
+            }
+        case .regex:
+            if let col = regexColumn {
+                RegexCleanupSheet(column: col,
+                                  values: ValueScanner.distinct(col, in: plans),
+                                  mapping: bindingForColumn(col),
+                                  onClose: { regexColumn = nil })
+            }
+        case .mapping:
+            if let col = mappingColumn {
+                MappingTableSheet(column: col,
+                                  values: ValueScanner.distinct(col, in: plans),
+                                  mapping: bindingForColumn(col),
+                                  allowed: Binding(get: { allowedValues[col] ?? [] },
+                                                   set: { allowedValues[col] = $0 }),
+                                  onClose: { mappingColumn = nil })
+            }
+        case .match:
+            ColumnMatchSheet(baseName: base?.name ?? "",
+                             suggestions: matchSuggestions,
+                             sourceSamples: matchSamples,
+                             targetSamples: matchSamples,
+                             onApply: { pairs in
+                                 showMatchSheet = false
+                                 withBusy("컬럼을 합치는 중…") { applyMatches(pairs) }
+                             },
+                             onClose: { showMatchSheet = false })
+        }
     }
 
     /// Detail viewer for one column, with the same anomaly flags used in review.
@@ -1574,12 +1613,15 @@ struct ContentView: View {
                                  samples: samples, percent: recommended[col]))
             }
         }
-        // 함께 고른 컬럼 → 닮은 정도 순.
-        return out.sorted {
-            let a = (prefer.contains($0.column) ? 1000 : 0) + ($0.percent ?? 0)
-            let b = (prefer.contains($1.column) ? 1000 : 0) + ($1.percent ?? 0)
-            return a > b
+        // 함께 고른 컬럼 → (틀 안 칸을 채우는 거라면) 틀 밖 컬럼 → 닮은 정도 순.
+        let fillingTemplate = templateColumns.contains(target)
+        func rank(_ c: FillFromSheet.Candidate) -> Int {
+            var score = c.percent ?? 0
+            if prefer.contains(c.column) { score += 1000 }
+            if fillingTemplate, !templateColumns.contains(c.column) { score += 300 }
+            return score
         }
+        return out.sorted { rank($0) > rank($1) }
     }
 
     /// 여러 칸을 한 번에 채운다 — 계획만 고쳐 두고 **다시 만드는 건 마지막에 한 번**.
@@ -9207,17 +9249,29 @@ struct PreviewWindowView: View {
                 }
                 .buttonStyle(.plain)
                 .padding(.leading, 20)
-            } else if extra {
-                // 틀 밖은 없앨 대상이 아니라 틀 안을 채울 재료 — 조용한 회색으로 둔다.
-                Text("틀 밖 — 채우기 재료")
-                    .font(.body).foregroundStyle(.secondary)
-                    .lineLimit(1).truncationMode(.tail)
-                    .padding(.leading, 20)
-            } else if model.usingTemplate, model.templateSet.contains(c) {
-                Label("틀 안 · 다 참", systemImage: "checkmark")
-                    .font(.body).foregroundStyle(.secondary)
-                    .lineLimit(1).truncationMode(.tail)
-                    .padding(.leading, 20)
+            } else {
+                // 값이 차 있는 컬럼. 할 일이 둘이라 둘 다 보여 준다:
+                // 틀 밖이면 **틀 안으로 보내기**, 그리고 (공통) 오타·형식 정리.
+                let open = model.openCounts[c] ?? 0
+                HStack(spacing: 8) {
+                    if extra {
+                        Button("틀 안으로 보내기") { model.request = .move(c) }
+                            .buttonStyle(.plain)
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(Color.accentColor)
+                            .help("이 컬럼의 값을 틀 안의 칸으로 옮깁니다.")
+                        Text("·").foregroundStyle(.secondary)
+                    }
+                    Button { model.request = .clean([c]) } label: {
+                        Text(open > 0 ? "정리할 값 \(open)종" : "값 정리")
+                            .font(.body.weight(open > 0 ? .semibold : .regular))
+                            .foregroundStyle(open > 0 ? Color.orange : .secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("같은 뜻인데 다르게 적힌 값을 하나로 맞추고, 형식(전화번호·날짜)을 정리합니다.")
+                }
+                .lineLimit(1)
+                .padding(.leading, 20)
             }
         }
         .frame(width: width(c), height: 36, alignment: .leading)
@@ -9229,6 +9283,7 @@ struct PreviewWindowView: View {
         .overlay(alignment: .trailing) { widthHandle(c) }
         .contextMenu {
             Button("이 값 채우기…") { model.request = .fill(c) }
+            Button("값 정리하기 (오타·형식)…") { model.request = .clean([c]) }
             Button("‘\(c.rawValue)’ 값을 다른 컬럼으로 옮기기…") { model.request = .move(c) }
             Divider()
             Button("이 컬럼 폭 기본으로") { columnWidths[c.rawValue] = nil }
@@ -9388,18 +9443,19 @@ struct PreviewWindowView: View {
                 .help("고른 두 컬럼을 한 칸으로 합칩니다. 앞에 있는 컬럼 이름이 남아요.")
             }
             // 버튼 이름은 **지금 누르면 실제로 일어날 일**로 — ‘정리’ 같은 말은 무슨 뜻인지 모른다.
-            let willFill = model.selection.count >= 2
-                || model.selection.contains { (model.holeCounts[$0] ?? 0) > 0 }
+            let many = model.selection.count >= 2
+            let sending = !many && model.usingTemplate
+                && model.selection.contains { model.extraColumns.contains($0) }
             Button { requestClean() } label: {
-                Text(willFill ? (model.selection.count >= 2 ? "이 칸들 합쳐 채우기…"
-                                                            : "이 칸 채우기…")
-                              : "값 형식 맞추기…")
+                Text(many ? "이 칸들 합쳐 채우기…"
+                          : (sending ? "틀 안으로 보내기…" : "이 칸 채우기…"))
             }
             .buttonStyle(.borderedProminent)
-            .help(willFill
+            .help(many
                   ? "어느 칸에 어느 컬럼의 값을 넣을지 정합니다 — 이어 붙이기(성 + 이름)나 "
                     + "값이 있는 것 하나만 중에 고를 수 있어요."
-                  : "고른 컬럼에서 같은 뜻인데 다르게 적힌 값을 하나로 맞춥니다.")
+                  : (sending ? "이 틀 밖 컬럼의 값을 틀 안의 어느 칸으로 보낼지 정합니다."
+                             : "이 칸에 어느 컬럼의 값을 가져올지 정합니다."))
             Button("선택 해제") { model.selection = [] }
                 .controlSize(.small)
         } else if !model.rows.isEmpty {
@@ -9414,9 +9470,15 @@ struct PreviewWindowView: View {
         let cols = shownColumns.filter { model.selection.contains($0) }
         guard !cols.isEmpty else { return }
         // 여러 개를 골랐다면 십중팔구 ‘이 칸들을 한 칸으로 모으고 싶다’는 뜻이다.
-        // 하나만 골랐을 땐 빈 행이 남은 칸이면 채우기, 아니면 값 형식 맞추기.
-        let needsFilling = cols.contains { (model.holeCounts[$0] ?? 0) > 0 }
-        model.request = (cols.count >= 2 || needsFilling) ? .fillFrom(cols) : .clean(cols)
+        if cols.count >= 2 { model.request = .fillFrom(cols); return }
+        guard let col = cols.first else { return }
+        // 하나만 골랐을 땐 **틀과의 관계**로 할 일이 정해진다:
+        //   틀 밖 → 틀 안의 칸으로 보내기,  틀 안 → 틀 밖에서 가져오기.
+        if model.usingTemplate, model.extraColumns.contains(col) {
+            model.request = .move(col)
+        } else {
+            model.request = .fillFrom([col])
+        }
     }
 
     private func requestMerge() {
