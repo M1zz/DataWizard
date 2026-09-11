@@ -1141,20 +1141,33 @@ struct FillFromSheet: View {
     }
 }
 
-/// 한 컬럼의 값을 **다른 컬럼으로 옮기는** 창.
-/// 표에서 컬럼 하나를 오른쪽 클릭해 바로 부를 수 있게, 고르는 것을 셋으로만 줄였다:
-/// 어디로 · 어떻게 · (붙일 때) 사이에 무엇을.
-struct MoveColumnSheet: View {
-    enum How: String, CaseIterable, Identifiable {
-        case fillBlanks   // 받는 칸이 비어 있을 때만 넣는다
-        case append       // 받는 값 뒤에 이어 붙인다
-        case replace      // 받는 값을 버리고 이 컬럼 값으로 바꾼다
+/// 컬럼 하나를 눌렀을 때 나오는 창 — **무엇을 할지 먼저 고른다.**
+/// 값을 다듬을지, 다른 칸으로 옮길지, 복제할지, 여러 칸과 합칠지.
+/// 옮기거나 복제할 땐 **양쪽에 값이 다 있는 행(충돌)을 어떻게 할지**까지 정한다.
+struct ColumnActionSheet: View {
+
+    enum Action: String, CaseIterable, Identifiable {
+        case clean, move, copy, merge
         var id: String { rawValue }
         var title: String {
             switch self {
-            case .fillBlanks: return "빈 칸만 채우기 — 받는 칸에 값이 있으면 그대로 둡니다"
-            case .append:     return "이어 붙이기 — 받는 값 뒤에 붙입니다 (성 + 이름 → 김 철수)"
-            case .replace:    return "통째로 바꾸기 — 받는 칸의 값을 버리고 이 값으로 채웁니다"
+            case .clean: return "값 정리하기 — 오타·형식을 그 자리에서 맞춥니다"
+            case .move:  return "다른 컬럼으로 옮기기 — 이 컬럼은 없어집니다"
+            case .copy:  return "다른 컬럼에 복제하기 — 이 컬럼도 그대로 남습니다"
+            case .merge: return "여러 컬럼과 한 칸으로 합치기…"
+            }
+        }
+    }
+
+    /// 양쪽에 값이 다 있을 때 무엇을 남길지.
+    enum Conflict: String, CaseIterable, Identifiable {
+        case keepDestination, takeSource, joinBoth
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .keepDestination: return "받는 칸 값을 그대로 두기 (빈 칸만 채움)"
+            case .takeSource:      return "가져온 값으로 덮어쓰기"
+            case .joinBoth:        return "둘 다 이어 붙이기"
             }
         }
     }
@@ -1165,16 +1178,22 @@ struct MoveColumnSheet: View {
     let rowTotal: Int
     /// 값 예시 (미리보기용).
     let sample: (UnifiedColumn) -> String
+    /// 받는 칸과 이 컬럼이 **둘 다 차 있는 행 수** 등 — 충돌 규모를 미리 보여 준다.
+    let overlap: (UnifiedColumn) -> (both: Int, srcOnly: Int, destOnly: Int)
+    /// 옮기기·복제 실행. `keepSource`가 true면 복제.
     let onApply: (_ destination: UnifiedColumn, _ order: [UnifiedColumn],
-                  _ separator: String, _ mode: CombineMode) -> Void
+                  _ separator: String, _ mode: CombineMode, _ keepSource: Bool) -> Void
+    let onClean: () -> Void
+    let onMerge: () -> Void
     let onClose: () -> Void
 
+    @State private var action: Action = .move
     @State private var destination: UnifiedColumn?
-    @State private var how: How = .fillBlanks
+    @State private var conflict: Conflict = .keepDestination
     @State private var separator = " "
 
-    private var chosen: (column: UnifiedColumn, inTemplate: Bool, blank: Int)? {
-        destinations.first { $0.column == destination }
+    private var counts: (both: Int, srcOnly: Int, destOnly: Int)? {
+        destination.map { overlap($0) }
     }
 
     /// 실제 값으로 결과를 보여 준다 — 어떤 선택이 무슨 결과인지 글보다 이게 빠르다.
@@ -1182,10 +1201,10 @@ struct MoveColumnSheet: View {
         let from = sample(source)
         guard let dest = destination else { return from.isEmpty ? "—" : from }
         let to = sample(dest)
-        switch how {
-        case .replace:    return from.isEmpty ? "(빈 칸)" : from
-        case .fillBlanks: return to.isEmpty ? (from.isEmpty ? "(빈 칸)" : from) : to
-        case .append:
+        switch conflict {
+        case .takeSource:      return from.isEmpty ? (to.isEmpty ? "(빈 칸)" : to) : from
+        case .keepDestination: return to.isEmpty ? (from.isEmpty ? "(빈 칸)" : from) : to
+        case .joinBoth:
             let parts = [to, from].filter { !$0.isEmpty }
             return parts.isEmpty ? "(빈 칸)" : parts.joined(separator: separator)
         }
@@ -1194,77 +1213,117 @@ struct MoveColumnSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("‘\(source.rawValue)’의 값을 어디로 옮길까요?")
-                    .font(.title2.weight(.bold))
-                Text("옮기고 나면 ‘\(source.rawValue)’ 컬럼은 없어지고, 값은 받는 컬럼에 남습니다. "
-                     + "행 수는 그대로예요 — 값이 자리를 옮길 뿐입니다.")
+                Text("‘\(source.rawValue)’ — 무엇을 할까요?").font(.title2.weight(.bold))
+                Text("행 수는 어떤 경우에도 그대로예요 — 값이 자리를 옮기거나 다듬어질 뿐입니다.")
                     .font(.body).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text("어느 컬럼으로").font(.body.weight(.semibold))
-                Picker("", selection: $destination) {
-                    Text("고르세요").tag(UnifiedColumn?.none)
-                    ForEach(destinations, id: \.column) { d in
-                        Text(d.column.rawValue
-                             + (d.inTemplate ? "  (틀 안" : "  (틀 밖")
-                             + (d.blank > 0 ? " · \(d.blank)/\(rowTotal)행 비어 있음)" : " · 다 참)"))
-                            .tag(UnifiedColumn?.some(d.column))
+            Picker("", selection: $action) {
+                ForEach(Action.allCases) { a in Text(a.title).tag(a) }
+            }
+            .labelsHidden()
+            .pickerStyle(.radioGroup)
+
+            if action == .move || action == .copy {
+                Divider()
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("어느 컬럼으로").font(.body.weight(.semibold))
+                    Picker("", selection: $destination) {
+                        Text("고르세요").tag(UnifiedColumn?.none)
+                        ForEach(destinations, id: \.column) { d in
+                            Text(d.column.rawValue
+                                 + (d.inTemplate ? "  (틀 안" : "  (틀 밖")
+                                 + (d.blank > 0 ? " · \(d.blank)/\(rowTotal)행 비어 있음)" : " · 다 참)"))
+                                .tag(UnifiedColumn?.some(d.column))
+                        }
                     }
+                    .labelsHidden()
+                    .frame(maxWidth: 460)
                 }
-                .labelsHidden()
-                .frame(maxWidth: 460)
-            }
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text("어떻게").font(.body.weight(.semibold))
-                Picker("", selection: $how) {
-                    ForEach(How.allCases) { h in Text(h.title).tag(h) }
+                if let c = counts {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 8) {
+                            Text("겹치는 행").font(.body.weight(.semibold))
+                            Text(c.both == 0
+                                 ? "없어요 — 그냥 빈 칸에 들어갑니다"
+                                 : "\(c.both)행은 양쪽에 값이 다 있어요")
+                                .font(.body)
+                                .foregroundStyle(c.both == 0 ? .secondary : Color.orange)
+                            Text("· 이 컬럼만 \(c.srcOnly)행 · 받는 칸만 \(c.destOnly)행")
+                                .font(.body).foregroundStyle(.secondary)
+                        }
+                        if c.both > 0 {
+                            Text("겹칠 때 어떻게 할까요?").font(.body.weight(.semibold))
+                            Picker("", selection: $conflict) {
+                                ForEach(Conflict.allCases) { k in Text(k.title).tag(k) }
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.radioGroup)
+                            if conflict == .joinBoth {
+                                HStack(spacing: 8) {
+                                    Text("사이에").font(.body).foregroundStyle(.secondary)
+                                    chip("붙여쓰기", "")
+                                    chip("공백", " ")
+                                    chip("쉼표", ", ")
+                                    chip("하이픈", "-")
+                                    Spacer(minLength: 0)
+                                }
+                            }
+                        }
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(c.both > 0 ? Color.orange.opacity(0.08) : Color.primary.opacity(0.04)))
                 }
-                .labelsHidden()
-                .pickerStyle(.radioGroup)
-            }
 
-            if how == .append {
                 HStack(spacing: 8) {
-                    Text("사이에").font(.body).foregroundStyle(.secondary)
-                    chip("붙여쓰기", "")
-                    chip("공백", " ")
-                    chip("쉼표", ", ")
-                    chip("하이픈", "-")
+                    Text("이렇게 됩니다").font(.body.weight(.semibold))
+                    Text(previewLine)
+                        .font(.body).lineLimit(1).truncationMode(.tail)
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        .background(RoundedRectangle(cornerRadius: 6)
+                            .fill(Color.accentColor.opacity(0.12)))
                     Spacer(minLength: 0)
                 }
-            }
-
-            HStack(spacing: 8) {
-                Text("이렇게 됩니다").font(.body.weight(.semibold))
-                Text(previewLine)
-                    .font(.body).lineLimit(1).truncationMode(.tail)
-                    .padding(.horizontal, 8).padding(.vertical, 4)
-                    .background(RoundedRectangle(cornerRadius: 6)
-                        .fill(Color.accentColor.opacity(0.12)))
-                Spacer(minLength: 0)
             }
 
             HStack {
                 Spacer()
                 Button("취소") { onClose() }
-                Button("옮기기") {
-                    guard let dest = destination else { return }
-                    switch how {
-                    case .replace:    onApply(dest, [source], " ", .join)
-                    case .fillBlanks: onApply(dest, [dest, source], " ", .first)
-                    case .append:     onApply(dest, [dest, source], separator, .join)
-                    }
-                }
-                .keyboardShortcut(.defaultAction)
-                .buttonStyle(.borderedProminent)
-                .disabled(destination == nil)
+                Button(actionTitle) { run() }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+                    .disabled((action == .move || action == .copy) && destination == nil)
             }
         }
         .padding(20)
-        .frame(width: 620)
+        .frame(width: 680)
+    }
+
+    private var actionTitle: String {
+        switch action {
+        case .clean: return "값 정리하러 가기"
+        case .move:  return "옮기기"
+        case .copy:  return "복제하기"
+        case .merge: return "합칠 컬럼 고르기…"
+        }
+    }
+
+    private func run() {
+        switch action {
+        case .clean: onClean()
+        case .merge: onMerge()
+        case .move, .copy:
+            guard let dest = destination else { return }
+            let keep = (action == .copy)
+            switch conflict {
+            case .takeSource:      onApply(dest, [source, dest], " ", .first, keep)
+            case .keepDestination: onApply(dest, [dest, source], " ", .first, keep)
+            case .joinBoth:        onApply(dest, [dest, source], separator, .join, keep)
+            }
+        }
     }
 
     private func chip(_ title: String, _ value: String) -> some View {

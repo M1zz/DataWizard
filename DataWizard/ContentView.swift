@@ -1236,8 +1236,10 @@ struct ContentView: View {
     private func applyColumnMerge(target: UnifiedColumn,
                                   order: [UnifiedColumn],
                                   separator: String,
-                                  mode: CombineMode = .join) {
-        mutatePlans(target: target, order: order, separator: separator, mode: mode)
+                                  mode: CombineMode = .join,
+                                  keepSource: Bool = false) {
+        mutatePlans(target: target, order: order, separator: separator,
+                    mode: mode, keepSource: keepSource)
         rebuildWorkColumns()
         scheduleSave()
     }
@@ -1247,7 +1249,9 @@ struct ContentView: View {
     private func mutatePlans(target: UnifiedColumn,
                              order: [UnifiedColumn],
                              separator: String,
-                             mode: CombineMode = .join) {
+                             mode: CombineMode = .join,
+                             /// 복제: 값을 가져오되 **원래 컬럼도 그대로 남긴다**.
+                             keepSource: Bool = false) {
         for i in plans.indices {
             var sources: [String] = []
             for col in order {
@@ -1260,6 +1264,7 @@ struct ContentView: View {
             if !plans[i].headers.contains(target.rawValue) {
                 plans[i].headers.append(target.rawValue)
             }
+            if keepSource { continue }      // 복제는 원래 컬럼을 건드리지 않는다
             for col in order where col != target {
                 // 파일의 **진짜 헤더 이름**으로 지워야 한다. 컬럼 이름은 앞뒤 공백을 떼어
                 // 쓰는데(`대학교 재학/휴학/졸업 예정`), 파일 헤더엔 공백이 붙어 있을 수 있어
@@ -1272,7 +1277,8 @@ struct ContentView: View {
                 plans[i].headers.removeAll { raw.contains($0) || $0 == col.rawValue }
             }
         }
-        // 이미 해 둔 값 정리도 새 칸으로 옮겨 둔다.
+        // 이미 해 둔 값 정리도 새 칸으로 옮겨 둔다 (복제는 원래 컬럼 것을 남겨 둔다).
+        guard !keepSource else { return }
         for col in order where col != target {
             if let m = valueMap.removeValue(forKey: col) {
                 valueMap[target] = (valueMap[target] ?? [:]).merging(m) { a, _ in a }
@@ -1552,22 +1558,51 @@ struct ContentView: View {
                     if $0.inTemplate != $1.inTemplate { return $0.inTemplate }
                     return $0.blank > $1.blank
                 }
-            MoveColumnSheet(
+            ColumnActionSheet(
                 source: source,
                 destinations: dests,
                 rowTotal: base?.rows.count ?? 0,
                 sample: { col in firstSampleValue(col) },
-                onApply: { dest, order, separator, mode in
+                overlap: { dest in overlapCount(source, dest) },
+                onApply: { dest, order, separator, mode, keepSource in
                     moveSource = nil
                     focusColumns = [dest]
-                    withBusy("‘\(source.rawValue)’의 값을 옮기는 중…") {
-                        applyColumnMerge(target: dest, order: order,
-                                         separator: separator, mode: mode)
-                        verifyRowCount("값을 옮긴")
+                    withBusy(keepSource ? "‘\(source.rawValue)’의 값을 복제하는 중…"
+                                        : "‘\(source.rawValue)’의 값을 옮기는 중…") {
+                        applyColumnMerge(target: dest, order: order, separator: separator,
+                                         mode: mode, keepSource: keepSource)
+                        verifyRowCount(keepSource ? "값을 복제한" : "값을 옮긴")
                     }
+                },
+                onClean: {
+                    moveSource = nil
+                    focusColumns = [source]
+                    withBusy("검토 화면을 만드는 중…") { startWork() }
+                },
+                onMerge: {
+                    moveSource = nil
+                    fillFromSelection = [source]
                 },
                 onClose: { moveSource = nil })
         }
+    }
+
+    /// 두 컬럼이 **같은 행에서 둘 다 차 있는지** 센다 — 옮기기·복제의 충돌 규모.
+    private func overlapCount(_ source: UnifiedColumn, _ dest: UnifiedColumn)
+        -> (both: Int, srcOnly: Int, destOnly: Int) {
+        var both = 0, onlySource = 0, onlyDest = 0
+        for plan in plans {
+            let hasSource = plan.isMapped(source), hasDest = plan.isMapped(dest)
+            guard hasSource || hasDest else { continue }
+            for row in plan.rows {
+                let a = hasSource ? plan.compose(source, from: row) : ""
+                let b = hasDest ? plan.compose(dest, from: row) : ""
+                if !a.isEmpty, !b.isEmpty { both += 1 }
+                else if !a.isEmpty { onlySource += 1 }
+                else if !b.isEmpty { onlyDest += 1 }
+            }
+        }
+        return (both, onlySource, onlyDest)
     }
 
     /// 이 컬럼의 값 하나 — 창에서 결과를 실제 값으로 보여 주기 위한 것.
@@ -9142,7 +9177,7 @@ struct PreviewWindowView: View {
         }
         Divider()
         Button("‘\(c.rawValue)’ 값 채우기…") { model.request = .fill(c) }
-        Button("‘\(c.rawValue)’ 값을 다른 컬럼으로 옮기기…") { model.request = .move(c) }
+        Button("‘\(c.rawValue)’로 무엇을 할까요…") { model.request = .move(c) }
     }
 
     /// 클립보드에 넣는다.
@@ -9358,10 +9393,13 @@ struct PreviewWindowView: View {
                 Image(systemName: st.icon)
                     .font(.body)
                     .foregroundStyle(showColors ? st.tint : .secondary)
+                // 이름을 누르면 이 컬럼으로 무엇을 할지 고르는 창이 뜬다.
                 Text(c.rawValue)
                     .font(.body.weight(.semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(1).truncationMode(.tail)
+                    .contentShape(Rectangle())
+                    .onTapGesture { model.request = .move(c) }
                 if let badge = st.badge {
                     Text(badge)
                         .font(.body.weight(.bold))
@@ -9425,9 +9463,10 @@ struct PreviewWindowView: View {
         // 오른쪽 끝을 잡고 끌면 폭이 바뀐다.
         .overlay(alignment: .trailing) { widthHandle(c) }
         .contextMenu {
+            Button("이 컬럼으로 무엇을 할까요…") { model.request = .move(c) }
+            Divider()
             Button("이 값 채우기…") { model.request = .fill(c) }
             Button("값 정리하기 (오타·형식)…") { model.request = .clean([c]) }
-            Button("‘\(c.rawValue)’ 값을 다른 컬럼으로 옮기기…") { model.request = .move(c) }
             Divider()
             Button("이 컬럼 폭을 값에 맞추기") { fitWidth(c) }
             Button("모든 컬럼 폭을 값에 맞추기") { fitAllWidths() }
@@ -9449,6 +9488,8 @@ struct PreviewWindowView: View {
                 .frame(height: 2)
         }
         .help("\(c.rawValue) — \(st.help)"
+              + "\n이름을 누르면 이 컬럼으로 무엇을 할지 고를 수 있어요 "
+              + "(정리 · 옮기기 · 복제 · 합치기)."
               + (isFocused ? "\n지금 검토 중인 컬럼입니다." : ""))
     }
 
