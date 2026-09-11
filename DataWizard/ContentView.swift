@@ -180,6 +180,12 @@ struct ContentView: View {
         var needClean: [(column: UnifiedColumn, note: String)] = []
         var proposalOrder: [UnifiedColumn] = []
         var autoEditable: [UnifiedColumn] = []
+        /// 틀 안 컬럼마다 **아직 비어 있는 행 수** — 이 도구의 목표가 바로 이 칸을 채우는 것이라
+        /// 다른 무엇보다 먼저 센다. (빈 칸이 하나도 없으면 목록에 넣지 않는다.)
+        var holes: [(column: UnifiedColumn, empty: Int)] = []
+        /// 틀 안 전체 칸 수와 그중 채워진 칸 수 — 진행률 한 줄용.
+        var templateCells = 0
+        var templateFilled = 0
     }
     @State private var cache = WorkCache()
 
@@ -519,11 +525,10 @@ struct ContentView: View {
                 .help("기준 파일의 어느 행이 이번 데이터의 어느 행과 같은 대상인지 가릴 컬럼입니다. 사번·주문번호처럼 행마다 고유한 값이 좋아요.")
                 Button("해제") { clearUserBase() }
                     .controlSize(.small)
-            } else {
-                Button("만들던 통합본에 이어붙이기…") { chooseBase() }
-                    .controlSize(.small)
-                    .help("이미 만들어 둔 통합본이 있으면 그 파일을 기준으로, 고른 컬럼 값만 덮어씁니다.")
             }
+            // ‘만들던 통합본에 이어붙이기’는 없앴다. 밖에서 가져오는 파일은 **틀 하나뿐**이고,
+            // 틀은 컬럼 이름만 준다 — 행은 올린 파일에서만 온다. (예전 세션이 기준본을 들고
+            // 있으면 위의 ‘해제’로 풀 수 있게만 남겨 둔다.)
             if showAllColumns {
             Divider().frame(height: 16)
             Button("손볼 거리 있는 것만") {
@@ -814,12 +819,29 @@ struct ContentView: View {
         let fill = emptyColumns
         let clean = columnsNeedingClean
         let settled = settledColumns
+        let holes = cache.holes
         VStack(alignment: .leading, spacing: 8) {
-            Text("남은 일").font(.headline)
-            if fill.isEmpty && clean.isEmpty {
-                Label("채울 것도, 정리할 값도 없습니다 — 이제 가져가면 돼요.",
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("남은 일").font(.headline)
+                if cache.templateCells > 0 {
+                    let pct = Int((Double(cache.templateFilled) / Double(cache.templateCells)) * 100)
+                    Text("틀 안 \(templateColumns.count)컬럼 × \(base?.rows.count ?? 0)행 중 \(pct)% 채워짐")
+                        .font(.body).monospacedDigit().foregroundStyle(.secondary)
+                }
+            }
+            if fill.isEmpty && clean.isEmpty && holes.isEmpty {
+                Label("틀 안이 다 찼고 정리할 값도 없습니다 — 이제 가져가면 돼요.",
                       systemImage: "checkmark.seal.fill")
                     .font(.body).foregroundStyle(.green)
+            }
+            // 이 도구가 하려는 일 그 자체 — 틀 안의 빈 행 채우기.
+            if !holes.isEmpty {
+                let rows = base?.rows.count ?? 0
+                todoLine("square.and.pencil",
+                         "틀 안에 빈 행이 남은 컬럼 \(holes.count)개",
+                         holes.prefix(12).map { "\($0.column.rawValue) — \($0.empty)/\(rows)행 비어 있음" },
+                         "틀 밖 컬럼을 없애는 게 아니라, 틀 안의 이 빈 행을 채우는 게 목표예요.",
+                         "‘\(holes[0].column.rawValue)’ 채우기…") { fillTarget = holes[0].column }
             }
             if !fill.isEmpty {
                 todoLine("rectangle.dashed", "채워야 할 컬럼 \(fill.count)개",
@@ -1084,10 +1106,12 @@ struct ContentView: View {
     /// 급한 순서: 틀 빈 칸 → 틀 밖 컬럼 → 값 정리 → 중복 확인 → 끝.
     private var nextStepHint: (text: String, column: UnifiedColumn?) {
         if let col = emptyTemplateColumns.first {
-            return ("‘\(col.rawValue)’ 칸이 비어 있어요 — 어디서 가져올지 정해 주세요", col)
+            return ("‘\(col.rawValue)’ 칸이 통째로 비어 있어요 — 어디서 가져올지 정해 주세요", col)
         }
-        if let col = outsideTemplateColumns.first {
-            return ("‘\(col.rawValue)’는 틀 밖 컬럼이에요 — 틀 안의 칸으로 옮기세요", col)
+        // 틀 안의 **빈 행**을 채우는 게 이 도구의 목표 — 틀 밖 컬럼을 없애는 게 아니다.
+        if let hole = cache.holes.first {
+            return ("‘\(hole.column.rawValue)’에 빈 행이 \(hole.empty)개 남았어요 — 어느 컬럼에서 가져올까요",
+                    hole.column)
         }
         if let first = cache.needClean.first {
             return ("‘\(first.column.rawValue)’에 정리할 값이 \(first.note) 남았어요", first.column)
@@ -1119,8 +1143,18 @@ struct ContentView: View {
                     if let c = emptyTemplateColumns.first { fillTarget = c }
                 }
             }
+            // 틀을 쓰는 동안의 진짜 진행률 — 틀 안 칸이 얼마나 찼는가.
+            if cache.templateCells > 0 {
+                let pct = Int((Double(cache.templateFilled) / Double(cache.templateCells)) * 100)
+                let blank = cache.templateCells - cache.templateFilled
+                checkChip(blank == 0 ? "틀 안 다 찼어요 ✓" : "틀 안 \(pct)% 참 · 빈 칸 \(blank)",
+                          ok: blank == 0) {
+                    if let c = cache.holes.first?.column { fillTarget = c }
+                }
+            }
             if !outsideTemplateColumns.isEmpty {
-                checkChip("틀 밖 \(outsideTemplateColumns.count)개", ok: false) {
+                // 틀 밖은 ‘없앨 것’이 아니라 틀 안을 채울 **재료**다 — 경고색을 쓰지 않는다.
+                checkChip("틀 밖 재료 \(outsideTemplateColumns.count)개", ok: true, tint: .secondary) {
                     focusColumns = Set(outsideTemplateColumns)
                 }
             }
@@ -1142,8 +1176,9 @@ struct ContentView: View {
     }
 
     @ViewBuilder
-    private func checkChip(_ text: String, ok: Bool, action: (() -> Void)?) -> some View {
-        let tint: Color = ok ? .green : .orange
+    private func checkChip(_ text: String, ok: Bool, tint override: Color? = nil,
+                           action: (() -> Void)?) -> some View {
+        let tint: Color = override ?? (ok ? .green : .orange)
         if let action {
             Button(action: action) { chipLabel(text, tint) }
                 .buttonStyle(.plain)
@@ -5019,6 +5054,7 @@ struct ContentView: View {
         c.autoEditable = c.settled.filter { col in
             (valueMap[col] ?? [:]).contains { $0.key != $0.value }
         }
+        (c.holes, c.templateCells, c.templateFilled) = computeTemplateHoles()
         // 손볼 거리가 있는 칸은 값 예시를 함께 보여 준다 (뭘 고칠지 바로 알 수 있게).
         var samples: [UnifiedColumn: [String]] = [:]
         for col in c.todo.prefix(40) {
@@ -5028,6 +5064,32 @@ struct ContentView: View {
         }
         c.samples = samples
         cache = c
+    }
+
+    /// 틀 안 컬럼의 빈 칸을 센다. **이 앱의 목표는 틀 밖 컬럼을 없애는 게 아니라
+    /// 틀 안의 행을 채우는 것**이라, 남은 일도 진행률도 여기서 나온다.
+    /// 틀이 없으면 셀 것이 없다 (틀 = 컬럼 이름만 빌려 온 파일, 행은 올린 파일에서만 온다).
+    private func computeTemplateHoles()
+        -> (holes: [(column: UnifiedColumn, empty: Int)], cells: Int, filled: Int) {
+        guard !templateColumns.isEmpty, let sheet = base, !sheet.rows.isEmpty else {
+            return ([], 0, 0)
+        }
+        var holes: [(column: UnifiedColumn, empty: Int)] = []
+        var cells = 0, filled = 0
+        for col in templateColumns {
+            let header = col.rawValue
+            var blank = 0
+            for row in sheet.rows {
+                let v = row[header] ?? ""
+                if v.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { blank += 1 }
+            }
+            cells += sheet.rows.count
+            filled += sheet.rows.count - blank
+            if blank > 0 { holes.append((col, blank)) }
+        }
+        // 많이 빈 칸부터 — 채웠을 때 결과가 가장 크게 완성되는 순서.
+        holes.sort { $0.empty > $1.empty }
+        return (holes, cells, filled)
     }
 
     /// 키로 삼을 만한 컬럼 — 값이 (거의) 행마다 고유하고 잘 채워진 컬럼.
@@ -5316,6 +5378,9 @@ struct ContentView: View {
         preview.usingTemplate = !templateColumns.isEmpty
         preview.extraColumns = templateColumns.isEmpty ? []
             : Set(finalColumns.filter { !templateColumns.contains($0) })
+        preview.templateSet = Set(templateColumns)
+        preview.templateOrder = templateColumns
+        preview.holeCounts = Dictionary(uniqueKeysWithValues: cache.holes.map { ($0.column, $0.empty) })
         // 컬럼을 고르는 중이면 지금 제안하는 컬럼을 강조해 둔다.
         if stage == .work, openColumn == nil { preview.focused = currentProposalColumn }
     }
@@ -7654,7 +7719,13 @@ final class PreviewModel: ObservableObject {
     /// 값이 하나도 없는 컬럼 — 머리글에 ‘비어 있음’으로 알려 준다.
     @Published var emptyColumns: Set<UnifiedColumn> = []
     /// 틀에 없는 컬럼 — 결과에는 들어가지만 ‘틀 밖’이라고 알려 준다.
+    /// 없앨 대상이 아니라 **틀 안을 채울 재료**다.
     @Published var extraColumns: Set<UnifiedColumn> = []
+    /// 틀 안 컬럼과, 그 컬럼에 아직 비어 있는 행 수 — 이 도구의 목표가 이 숫자를 0으로 만드는 것.
+    @Published var templateSet: Set<UnifiedColumn> = []
+    @Published var holeCounts: [UnifiedColumn: Int] = [:]
+    /// 틀이 정한 컬럼 순서 — 표에서 틀 안 컬럼을 이 순서대로 **왼쪽에 먼저** 세운다.
+    @Published var templateOrder: [UnifiedColumn] = []
     /// 틀을 쓰고 있는가 (틀 밖 표시를 켤지).
     @Published var usingTemplate = false
     // 미리보기 창에서 고른 컬럼과, 메인 창에 보내는 요청.
@@ -7783,6 +7854,42 @@ final class PreviewModel: ObservableObject {
     var needsWorkColumns: [UnifiedColumn] { columns.filter { status($0).needsWork } }
     var confirmedColumns: [UnifiedColumn] { columns.filter { checked.contains($0) } }
 
+    /// 틀 안 컬럼을 **틀이 정한 순서대로 왼쪽에** 세우고, 틀 밖(재료)은 그 뒤로 민다.
+    /// 파일 세 개의 컬럼이 합집합으로 늘어서도 완성될 표의 모양이 먼저 보이게.
+    func templateFirst(_ cols: [UnifiedColumn]) -> [UnifiedColumn] {
+        guard usingTemplate, !templateOrder.isEmpty else { return cols }
+        var rank: [UnifiedColumn: Int] = [:]
+        for (i, c) in templateOrder.enumerated() { rank[c] = i }
+        return cols.enumerated().sorted { a, b in
+            let ra = rank[a.element], rb = rank[b.element]
+            switch (ra, rb) {
+            case let (x?, y?): return x == y ? a.offset < b.offset : x < y
+            case (_?, nil):    return true
+            case (nil, _?):    return false
+            default:           return a.offset < b.offset
+            }
+        }.map(\.element)
+    }
+
+    /// 컬럼을 세 갈래로 나눈다 — 색이 이 갈래를 그대로 나타낸다.
+    /// 여러 파일의 컬럼이 합집합으로 늘어서 있어도, 무엇이 목표인지 한눈에 보이게.
+    enum ColumnKind { case templateFilled, templateHole, outside }
+    func kind(_ c: UnifiedColumn) -> ColumnKind {
+        guard usingTemplate else { return .templateFilled }
+        if !templateSet.contains(c) { return .outside }
+        return (holeCounts[c] ?? 0) > 0 ? .templateHole : .templateFilled
+    }
+
+    /// 갈래별 색 — 파랑 = 틀 안인데 아직 빈 행이 있음(할 일), 초록 = 틀 안 다 참,
+    /// 회색 = 틀 밖(재료).
+    func kindTint(_ c: UnifiedColumn) -> Color {
+        switch kind(c) {
+        case .templateHole:   return .accentColor
+        case .templateFilled: return .green
+        case .outside:        return .secondary
+        }
+    }
+
     /// 셀 한 칸의 배경색. 컬럼 상태가 열 전체로 내려와 세로줄로 읽히게 합니다.
     /// 확정한 컬럼은 사람이 손봐서 끝낸 열이므로 초록으로 채웁니다.
     func cellTint(_ c: UnifiedColumn, improved: Bool) -> Color {
@@ -7791,9 +7898,13 @@ final class PreviewModel: ObservableObject {
         case .needsWork:            return .orange.opacity(improved ? 0.12 : 0.06)
         case .resolved, .nothingToDo:
             if improved { return .accentColor.opacity(0.10) }
-            // 틀 밖 컬럼은 옅은 주황으로 — 옮겨야 할 값이라는 뜻.
-            if usingTemplate, extraColumns.contains(c) { return .orange.opacity(0.07) }
-            return .clear
+            guard usingTemplate else { return .clear }
+            // 갈래를 열 전체에 아주 옅게 깔아 준다 — 어느 열이 틀 안이고 밖인지 구분되게.
+            switch kind(c) {
+            case .templateHole:   return .accentColor.opacity(0.03)
+            case .templateFilled: return .green.opacity(0.04)
+            case .outside:        return .secondary.opacity(0.07)
+            }
         }
     }
 
@@ -7803,6 +7914,7 @@ final class PreviewModel: ObservableObject {
         rowFiles = []; fileNames = []
         splitColumns = []; pairHints = [:]; columnOwners = [:]; baseName = ""; newRows = []
         emptyColumns = []; extraColumns = []; usingTemplate = false
+        templateSet = []; holeCounts = [:]; templateOrder = []
         rowKeys = []; duplicateRows = []; duplicateOf = [:]
         showDuplicatesOnly = false
         selection = []; request = nil
@@ -7982,6 +8094,8 @@ struct PreviewWindowView: View {
     @State private var unconfirmedOnly = false
     /// 틀 밖 컬럼만 보기 — 어느 파일에서 온 값이 아직 안 옮겨졌는지 한눈에.
     @State private var extrasOnly = false
+    /// 틀 안에 빈 행이 남은 컬럼만 보기 — 이 도구가 하려는 일 그 자체.
+    @State private var holesOnly = false
     @State private var showChanges = false
     /// 눌러서 데려갈 컬럼 (표를 가로로 스크롤한다).
     @State private var jumpColumn: String?
@@ -8002,10 +8116,14 @@ struct PreviewWindowView: View {
         columnWidths[c.rawValue] ?? Self.defaultColumnWidth
     }
 
-    /// 표에 그릴 컬럼 — `틀 밖 컬럼만` 을 켜면 그것들만.
+    /// 표에 그릴 컬럼. 파일이 여럿이면 컬럼이 합집합이라 금세 난잡해지니
+    /// ‘채울 칸만’(틀 안 빈 행) · ‘틀 밖만’(재료)으로 좁혀 볼 수 있다.
     private var shownColumns: [UnifiedColumn] {
-        guard extrasOnly, model.usingTemplate else { return model.columns }
-        return model.columns.filter { model.extraColumns.contains($0) }
+        guard model.usingTemplate else { return model.columns }
+        var cols = model.columns
+        if holesOnly { cols = cols.filter { (model.holeCounts[$0] ?? 0) > 0 } }
+        else if extrasOnly { cols = cols.filter { model.extraColumns.contains($0) } }
+        return model.templateFirst(cols)
     }
 
     /// 파일 색·컬럼 상태 색을 켤지 (기본 켬, 설정에 기억).
@@ -8057,8 +8175,22 @@ struct PreviewWindowView: View {
     private var summaryChips: some View {
         Text("전체 \(model.rows.count)행"
              + (visibleRows.count == model.rows.count ? "" : " 중 \(visibleRows.count)행 표시")
-             + " · OK \(model.checked.count)/\(model.columns.count)컬럼")
+             + (shownColumns.count == model.columns.count
+                ? " · 컬럼 \(model.columns.count)개"
+                : " · 컬럼 \(model.columns.count)개 중 \(shownColumns.count)개 표시"))
             .font(.body).foregroundStyle(.secondary)
+            .lineLimit(1).fixedSize()
+        // 진행률은 ‘틀 안의 빈 행이 얼마나 남았나’로 읽는다 — 그게 목표니까.
+        if model.usingTemplate {
+            let holes = model.holeCounts.values.reduce(0, +)
+            Label(holes == 0 ? "틀 안 다 찼어요"
+                             : "채울 칸 \(holes) · \(model.holeCounts.count)컬럼",
+                  systemImage: holes == 0 ? "checkmark.seal.fill" : "square.and.pencil")
+                .font(.body.weight(.medium))
+                .foregroundStyle(holes == 0 ? Color.green : Color.accentColor)
+                .lineLimit(1).fixedSize()
+                .help("틀 안 컬럼에 아직 값이 없는 칸 수입니다. 파란 열의 머리글을 누르면 바로 채웁니다.")
+        }
         if model.needsWorkColumns.isEmpty {
             Label("모든 컬럼 작업 완료", systemImage: "checkmark.seal.fill")
                 .font(.body.weight(.medium))
@@ -8069,6 +8201,7 @@ struct PreviewWindowView: View {
                   systemImage: "exclamationmark.triangle.fill")
                 .font(.body.weight(.medium))
                 .foregroundStyle(Color.orange)
+                .lineLimit(1).fixedSize()
                 .help("아직 결정하지 못한 값이 남은 컬럼: "
                       + model.needsWorkColumns.map(\.rawValue).joined(separator: ", "))
         }
@@ -8123,11 +8256,23 @@ struct PreviewWindowView: View {
             .toggleStyle(.checkbox)
             .fixedSize()
             .help("아직 확정 표시를 안 한 행만 봅니다.")
-        if model.usingTemplate, !model.extraColumns.isEmpty {
-            Toggle(isOn: $extrasOnly) { Text("틀 밖 컬럼만 (\(model.extraColumns.count))") }
+        if model.usingTemplate, !model.holeCounts.isEmpty {
+            Toggle(isOn: Binding(get: { holesOnly },
+                                 set: { holesOnly = $0; if $0 { extrasOnly = false } })) {
+                Text("채울 칸만 (\(model.holeCounts.count))")
+            }
                 .toggleStyle(.checkbox)
                 .fixedSize()
-                .help("틀에 없는 컬럼만 봅니다 — 이 값들을 틀 안의 칸으로 옮기면 됩니다.")
+                .help("틀 안인데 아직 빈 행이 남은 컬럼만 봅니다 — 이걸 채우는 게 목표예요.")
+        }
+        if model.usingTemplate, !model.extraColumns.isEmpty {
+            Toggle(isOn: Binding(get: { extrasOnly },
+                                 set: { extrasOnly = $0; if $0 { holesOnly = false } })) {
+                Text("틀 밖 재료만 (\(model.extraColumns.count))")
+            }
+                .toggleStyle(.checkbox)
+                .fixedSize()
+                .help("틀에 없는 컬럼만 봅니다 — 틀 안의 칸을 채울 때 쓰는 재료입니다.")
         }
         if !model.duplicateRows.isEmpty {
             Toggle(isOn: Binding(get: { model.showDuplicatesOnly },
@@ -8223,7 +8368,8 @@ struct PreviewWindowView: View {
             .lineLimit(1).truncationMode(.tail)
             .frame(width: width(c), alignment: .leading)
             .padding(.horizontal, 8).padding(.vertical, 4)
-            .background(cellBackground(c, improved: improved, focused: focused))
+            .background(cellBackground(c, improved: improved, focused: focused,
+                                       blank: value.isEmpty))
             .overlay(alignment: .trailing) { focusEdge(focused) }
             .contextMenu { cellMenu(c, value) }
             .onTapGesture(count: 2) {
@@ -8233,12 +8379,18 @@ struct PreviewWindowView: View {
     }
 
     /// 셀 배경 한 겹으로 합치기 — 겹쳐 그리던 세 겹을 하나로.
-    private func cellBackground(_ c: UnifiedColumn, improved: Bool, focused: Bool) -> Color {
+    private func cellBackground(_ c: UnifiedColumn, improved: Bool, focused: Bool,
+                                blank: Bool) -> Color {
         // 값이 바뀐 칸이 가장 잘 보여야 한다 — 무엇이 손대졌는지가 제일 중요한 정보다.
         if improved { return .accentColor.opacity(0.20) }
         if focused { return .accentColor.opacity(0.12) }
         if model.selection.contains(c) { return .accentColor.opacity(0.07) }
-        return showColors ? model.cellTint(c, improved: improved) : .clear
+        guard showColors else { return .clear }
+        // 틀 안인데 **이 칸이 비었으면** 파랗게 — 채워야 할 칸이 어디인지 셀 단위로 보이게.
+        if model.usingTemplate, model.templateSet.contains(c), blank {
+            return .accentColor.opacity(0.13)
+        }
+        return model.cellTint(c, improved: improved)
     }
 
     /// 셀에서 바로 할 수 있는 일 — 복사와 값 고치기.
@@ -8267,9 +8419,10 @@ struct PreviewWindowView: View {
     /// 지금 보이는 표를 탭으로 구분해 복사 — 엑셀·시트에 그대로 붙습니다.
     private func copyTable() {
         var lines: [String] = []
-        lines.append((["행", "출처"] + model.columns.map(\.rawValue)).joined(separator: "\t"))
+        let cols = shownColumns    // 화면에 보이는 순서 그대로 (틀 안 컬럼이 먼저)
+        lines.append((["행", "출처"] + cols.map(\.rawValue)).joined(separator: "\t"))
         for (i, row) in visibleRows {
-            let cells = model.columns.map { row[$0].replacingOccurrences(of: "\t", with: " ") }
+            let cells = cols.map { row[$0].replacingOccurrences(of: "\t", with: " ") }
             lines.append((["\(i + 1)", model.fileLabel(row: i)] + cells).joined(separator: "\t"))
         }
         copyToClipboard(lines.joined(separator: "\n"))
@@ -8420,19 +8573,37 @@ struct PreviewWindowView: View {
                 Text("지금 볼 컬럼")
                     .font(.body).foregroundStyle(Color.accentColor)
                     .padding(.leading, 20)
+            } else if let holes = model.holeCounts[c], holes > 0 {
+                // 틀 안인데 아직 빈 행이 있는 컬럼 — 눌러서 바로 채우러 간다.
+                Button { model.request = .fill(c) } label: {
+                    Text("빈 행 \(holes)개 — 눌러서 채우기")
+                        .font(.body.weight(.semibold)).foregroundStyle(Color.accentColor)
+                        .lineLimit(1).truncationMode(.tail)
+                }
+                .buttonStyle(.plain)
+                .padding(.leading, 20)
             } else if model.emptyColumns.contains(c) {
-                Text("비어 있음 — 채울 칸을 골라 주세요")
+                Button { model.request = .fill(c) } label: {
+                    Text("통째로 비어 있음 — 눌러서 채우기")
+                        .font(.body.weight(.semibold)).foregroundStyle(Color.accentColor)
+                        .lineLimit(1).truncationMode(.tail)
+                }
+                .buttonStyle(.plain)
+                .padding(.leading, 20)
+            } else if extra {
+                // 틀 밖은 없앨 대상이 아니라 틀 안을 채울 재료 — 조용한 회색으로 둔다.
+                Text("틀 밖 — 채우기 재료")
                     .font(.body).foregroundStyle(.secondary)
                     .lineLimit(1).truncationMode(.tail)
                     .padding(.leading, 20)
-            } else if extra {
-                Text("틀 밖 — 틀 안의 칸으로 옮기세요")
-                    .font(.body.weight(.semibold)).foregroundStyle(.orange)
+            } else if model.usingTemplate, model.templateSet.contains(c) {
+                Text("틀 안 · 다 찼어요")
+                    .font(.body).foregroundStyle(.green)
                     .lineLimit(1).truncationMode(.tail)
                     .padding(.leading, 20)
             }
         }
-        .frame(width: width(c), height: 42, alignment: .leading)
+        .frame(width: width(c), height: 36, alignment: .leading)
         .padding(.horizontal, 8).padding(.vertical, 6)
         .overlay(alignment: .top) {
             if picked { Rectangle().fill(Color.accentColor).frame(height: 3) }
@@ -8514,8 +8685,10 @@ struct PreviewWindowView: View {
                 headerCell(c).id("col:" + c.rawValue)
             }
         }
-        .frame(height: 44)
+        .frame(height: 48)
+        // 머리글은 스크롤 위에 떠 있다 — 불투명한 바닥을 먼저 깔아야 아래 행이 비쳐 보이지 않는다.
         .background(Color(nsColor: .underPageBackgroundColor))
+        .background(Color(nsColor: .textBackgroundColor))
     }
 
     /// 컬럼을 고르면 나타나는 동작들 — 정리하러 가기 / 두 컬럼 합치기.
@@ -8539,8 +8712,10 @@ struct PreviewWindowView: View {
             Button("선택 해제") { model.selection = [] }
                 .controlSize(.small)
         } else if !model.rows.isEmpty {
-            Text("컬럼 이름 옆 네모를 체크하면 정리·합치기를 할 수 있어요")
+            // 툴바가 좁아 두 줄로 접히면 오히려 안 읽힌다 — 한 줄로 짧게.
+            Text("머리글 네모 체크 → 정리·합치기")
                 .font(.body).foregroundStyle(.secondary)
+                .lineLimit(1)
         }
     }
 
@@ -8584,11 +8759,19 @@ struct PreviewWindowView: View {
 
     /// 머리글 배경 — 상태색이 먼저, 그다음 ‘어느 파일에서 온 열인지’ 색.
     private func headerTint(_ c: UnifiedColumn, _ st: ColumnWorkStatus) -> Color {
-        // 틀 밖 컬럼이 가장 먼저 눈에 띄어야 한다 — 저 값들이 틀 안으로 옮겨 가야 하니까.
-        if model.usingTemplate, model.extraColumns.contains(c) { return .orange.opacity(0.18) }
-        if st.needsWork { return .orange.opacity(0.14) }
-        if model.checked.contains(c) { return .green.opacity(0.14) }
-        return .clear
+        guard model.usingTemplate else {
+            if st.needsWork { return .orange.opacity(0.14) }
+            if model.checked.contains(c) { return .green.opacity(0.14) }
+            return .clear
+        }
+        // 틀을 쓰는 동안은 ‘틀 안 빈 행’이 가장 먼저 눈에 띄어야 한다 — 그게 할 일이니까.
+        switch model.kind(c) {
+        case .templateHole:   return .accentColor.opacity(0.20)
+        case .outside:        return .secondary.opacity(0.12)
+        case .templateFilled:
+            if st.needsWork { return .orange.opacity(0.14) }
+            return .green.opacity(0.12)
+        }
     }
 
     /// 이 컬럼이 어느 파일에 있는지 점으로 — 있는 파일은 그 색, 없으면 빈 동그라미.
@@ -8639,13 +8822,12 @@ struct PreviewWindowView: View {
             legendItem("minus.circle", .secondary, "손댈 값 없음")
             legendItem("rectangle.portrait.and.arrow.right", .accentColor, "검토 중인 열")
 
-            if model.usingTemplate, !model.extraColumns.isEmpty {
-                HStack(spacing: 4) {
-                    RoundedRectangle(cornerRadius: 2).fill(Color.orange.opacity(0.35))
-                        .frame(width: 10, height: 10)
-                    Text("틀 밖 컬럼 \(model.extraColumns.count)개 — 틀 안으로 옮기세요")
-                        .font(.body).foregroundStyle(.secondary)
-                }
+            if model.usingTemplate {
+                // 컬럼 색 = 틀과의 관계. 파일이 여럿이라 컬럼이 합집합으로 늘어서도
+                // 무엇이 목표인지(파란 열 채우기) 색만 보고 알 수 있게.
+                legendSwatch(.accentColor, "틀 안 · 빈 행 있음 — 눌러서 채우기")
+                legendSwatch(.green, "틀 안 · 다 참")
+                legendSwatch(.secondary, "틀 밖 \(model.extraColumns.count)개 — 채우기 재료")
             }
             HStack(spacing: 4) {
                 Text("—").font(.body).foregroundStyle(.secondary.opacity(0.6))
@@ -8661,6 +8843,14 @@ struct PreviewWindowView: View {
         }
         .padding(.horizontal, 16).padding(.vertical, 6)
         .background(Color(nsColor: .underPageBackgroundColor))
+    }
+
+    private func legendSwatch(_ tint: Color, _ label: String) -> some View {
+        HStack(spacing: 4) {
+            RoundedRectangle(cornerRadius: 2).fill(tint.opacity(0.35))
+                .frame(width: 10, height: 10)
+            Text(label).font(.body).foregroundStyle(.secondary)
+        }
     }
 
     private func legendItem(_ icon: String, _ tint: Color, _ label: String) -> some View {
