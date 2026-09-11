@@ -9130,12 +9130,35 @@ struct PreviewWindowView: View {
         let board = NSPasteboard.general
         board.clearContents()
         if asTable {
+            // 엑셀은 **HTML 표**를 가장 먼저 본다. 이게 없으면 글자로 받아서
+            // 예전에 쓰던 ‘텍스트 나누기’ 설정(고정 너비 6글자 같은 것)을 그대로 적용해
+            // 값이 잘리거나 여러 칸으로 쪼개진다.
             let tsv = NSPasteboard.PasteboardType("public.utf8-tab-separated-values-text")
-            board.declareTypes([tsv, .tabularText, .string], owner: nil)
+            board.declareTypes([.html, tsv, .tabularText, .string], owner: nil)
+            board.setString(htmlTable(from: text), forType: .html)
             board.setString(text, forType: tsv)
             board.setString(text, forType: .tabularText)
         }
         board.setString(text, forType: .string)
+    }
+
+    /// 탭·줄바꿈으로 된 표를 HTML `<table>`로 — 표로 붙여넣게 하는 가장 확실한 방법.
+    private func htmlTable(from tsv: String) -> String {
+        func escape(_ s: String) -> String {
+            s.replacingOccurrences(of: "&", with: "&amp;")
+             .replacingOccurrences(of: "<", with: "&lt;")
+             .replacingOccurrences(of: ">", with: "&gt;")
+        }
+        var out = "<meta charset=\"utf-8\"><table>"
+        for line in tsv.components(separatedBy: "\n") {
+            out += "<tr>"
+            for cell in line.components(separatedBy: "\t") {
+                // 셀 하나하나를 글자로 못 박는다 (앞자리 0·긴 값이 그대로 남게).
+                out += "<td style=\"mso-number-format:'\\@'\">" + escape(cell) + "</td>"
+            }
+            out += "</tr>"
+        }
+        return out + "</table>"
     }
 
     /// 지금 보이는 표를 탭으로 구분해 복사 — 엑셀·시트에 그대로 붙습니다.
