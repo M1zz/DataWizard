@@ -7702,6 +7702,12 @@ struct MappingTableSheet: View {
     private var parsed: MappingTableParser.Parsed { MappingTableParser.parse(text) }
     private var tableFrom: Set<String> { Set(parsed.pairs.map { $0.from }) }
     private var uncovered: [DistinctValue] { values.filter { !tableFrom.contains($0.value) } }
+    /// 표에는 적었는데 **이 컬럼엔 없는** 원본 값들.
+    /// (값이 여러 컬럼에 나뉘어 있을 때 “표는 맞는데 매핑이 안 된다”의 대부분이 이것이다.)
+    private var unusedRules: [String] {
+        let here = Set(values.map(\.value))
+        return parsed.pairs.map(\.from).filter { !here.contains($0) }
+    }
     private var coveredCount: Int { values.count - uncovered.count }
     private var lookup: [String: String] {
         Dictionary(parsed.pairs.map { ($0.from, $0.to) }, uniquingKeysWith: { _, last in last })
@@ -7777,6 +7783,13 @@ struct MappingTableSheet: View {
                 Text("한 줄에 하나씩 ‘원본 값 → 모을 값’ 형태로 적거나 붙여넣으세요. 구분자는 탭·→·:·쉼표 모두 됩니다.")
                     .font(.body).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                if !unusedRules.isEmpty {
+                    Text("표의 \(unusedRules.count)줄은 이 컬럼에 없는 값이에요 (예: \(unusedRules.prefix(3).joined(separator: " · "))). "
+                         + "값이 두 컬럼에 나뉘어 있다면, 먼저 완성본 미리보기에서 두 컬럼을 "
+                         + "‘값이 있는 것 하나만’으로 한 칸에 모은 뒤 이 표를 붙여넣으세요.")
+                        .font(.body).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             Spacer()
             Button("닫기", action: onClose).keyboardShortcut(.cancelAction)
@@ -7795,6 +7808,13 @@ struct MappingTableSheet: View {
             Text("전체 \(values.count)종 · 매핑 \(coveredCount)종 · 규칙 \(parsed.pairs.count)개"
                  + (parsed.skipped.isEmpty ? "" : " · 못 읽은 줄 \(parsed.skipped.count)개"))
                 .font(.body).foregroundStyle(.secondary)
+            if !unusedRules.isEmpty {
+                Text("· 이 컬럼에 없는 값 \(unusedRules.count)줄")
+                    .font(.body.weight(.medium)).foregroundStyle(.orange)
+                    .help("표에 적었지만 ‘\(column.rawValue)’에는 없는 값이에요 — 다른 컬럼에 들어 있을 수 있습니다:\n"
+                          + unusedRules.prefix(12).joined(separator: "\n")
+                          + (unusedRules.count > 12 ? "\n…" : ""))
+            }
             Spacer()
             if !recommendableUncovered.isEmpty {
                 Button {
