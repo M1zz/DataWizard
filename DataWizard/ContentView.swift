@@ -161,6 +161,8 @@ struct ContentView: View {
     @State private var generateIsSerial = false
     /// ‘이 값 채우기’ 창을 띄운 대상 칸.
     @State private var fillTarget: UnifiedColumn?
+    /// 한 컬럼의 변경사항만 미리 보는 창.
+    @State private var changePreviewColumn: UnifiedColumn?
     /// 미리보기에서 여러 컬럼을 골라 ‘데이터 정리하기’를 누른 경우 — 그 선택 전체.
     @State private var fillFromSelection: [UnifiedColumn] = []
     /// 미리보기 계산 순번 — 늦게 끝난 옛 계산이 새 결과를 덮지 않게.
@@ -229,6 +231,10 @@ struct ContentView: View {
                                     set: { if !$0 { fillTarget = nil } })) { fillSheet }
         .sheet(isPresented: Binding(get: { !fillFromSelection.isEmpty },
                                     set: { if !$0 { fillFromSelection = [] } })) { fillFromSheet }
+        .sheet(isPresented: Binding(get: { changePreviewColumn != nil },
+                                    set: { if !$0 { changePreviewColumn = nil } })) {
+            changePreviewSheet
+        }
         .sheet(item: $filePreview) { plan in
             FilePreviewSheet(plan: plan,
                              tint: fileTint(plans.firstIndex(where: { $0.id == plan.id }) ?? 0),
@@ -4074,33 +4080,60 @@ struct ContentView: View {
         return Array(review.samples.prefix(n))
     }
 
+    /// 컬럼 하나를 다 본 뒤의 마무리 — **무엇이 바뀌는지 보고 → 적용하거나 → 넘어가거나**.
+    /// (‘끝내기’는 무슨 일이 일어나는지 알 수 없어서 셋으로 갈랐다.)
     private func detailFooter(_ review: ColumnReview, at i: Int?) -> some View {
         let open = openCount(review)
-        let isLast = (i ?? 0) >= stepOrder.count - 1
+        let changed = columnChanges(review.column)
         return HStack(spacing: 10) {
             Button("← 이전 컬럼") { openStep(-1) }
                 .disabled((i ?? 0) == 0)
+            Button("목록으로") {
+                withAnimation(.easeInOut(duration: 0.15)) { openColumn = nil }
+            }
             Spacer()
             if open > 0 {
                 Text("아직 \(open)종이 남았어요 — 그대로 둬도 됩니다")
                     .font(.body).foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
-            Button("목록으로") {
-                withAnimation(.easeInOut(duration: 0.15)) { openColumn = nil }
+            Button(changed.isEmpty ? "바뀐 값 없음" : "변경사항 미리보기 (\(changed.count))") {
+                changePreviewColumn = review.column
             }
+            .disabled(changed.isEmpty)
+            .help("이 컬럼에서 어떤 값이 무엇으로 바뀌는지 이전 값 → 새 값으로 봅니다.")
+            Button("넘어가기") { openStep(1) }
+                .help(changed.isEmpty
+                      ? "확정 표시 없이 다음 컬럼으로 갑니다 — 나중에 다시 볼 수 있어요."
+                      : "확정 표시 없이 다음으로 갑니다. 지금까지 고친 값 \(changed.count)개는 그대로 남아요.")
             Button {
-                if open > 0 { checked.insert(review.column) }   // 남은 값은 ‘이대로 확정’
+                checked.insert(review.column)     // 이 컬럼은 다 봤다 = 결과에 반영
                 openStep(1)
             } label: {
-                Text(isLast ? "이 컬럼 끝내기 →" : (open > 0 ? "그대로 두고 다음 →" : "다음 컬럼 →"))
+                Text(changed.isEmpty ? "이대로 확정 →" : "적용하기 (\(changed.count)) →")
                     .fontWeight(.semibold)
             }
             .controlSize(.large)
             .buttonStyle(.borderedProminent)
-            .help(open > 0 ? "남은 값을 원본 그대로 두고 이 컬럼을 끝냅니다."
-                           : "이 컬럼은 정리가 끝났어요. 다음 컬럼으로 갑니다.")
+            .help(changed.isEmpty
+                  ? "바꿀 값이 없어요. 이 컬럼을 다 본 것으로 표시하고 다음으로 갑니다."
+                  : "바뀐 값 \(changed.count)개를 결과에 반영하고 다음 컬럼으로 갑니다.")
         }
         .padding(.top, 4)
+    }
+
+    /// 이 컬럼에서 지금 실제로 바뀌는 칸들 — 완성본에 들어갈 값 기준.
+    private func columnChanges(_ col: UnifiedColumn) -> [ChangeRecord] {
+        preview.changes.filter { $0.column == col }
+    }
+
+    /// 한 컬럼의 변경 내역만 떼어 보여 주는 창.
+    @ViewBuilder
+    private var changePreviewSheet: some View {
+        if let col = changePreviewColumn {
+            ChangeLogSheet(changes: columnChanges(col),
+                           onClose: { changePreviewColumn = nil })
+        }
     }
 
     private func reviewSection(_ review: ColumnReview, alwaysExpanded: Bool = false) -> some View {
@@ -5413,8 +5446,9 @@ struct ContentView: View {
                                  appendNewRows: appendNewRows,
                                  markNewRows: markNewRows,
                                  match: rowMatch,
-                                 visibleColumns: visibleFinalColumns.isEmpty ? finalColumns
-                                                                            : visibleFinalColumns,
+                                 // 작업대는 늘 **전부** 보여 준다 — 고른 컬럼만 남으면
+                                 // 어디서 값을 끌어올지 볼 수가 없다.
+                                 visibleColumns: finalColumns,
                                  keyColumn: keyColumn,
                                  needsBaseline: preview.baselineRows.isEmpty,
                                  generated: generatedColumns)
@@ -5591,8 +5625,14 @@ struct ContentView: View {
     private var focusOrdered: [UnifiedColumn] {
         let auto = autoFillSettled ? Set(autoEditableColumns) : []
         let made = Set(generatedColumns.keys)
+        // 사람이 실제로 값을 바꿔 둔 컬럼은 **고르지 않았어도** 결과에 반영한다.
+        // (이게 빠져 있어서, 작업대에서 바로 고친 값이 미리보기에 안 들어갔다.)
+        let edited = Set(valueMap.compactMap { col, map in
+            map.contains { $0.key != $0.value } ? col : nil
+        })
         return allColumns.filter {
-            focusColumns.contains($0) || auto.contains($0) || made.contains($0)
+            focusColumns.contains($0) || auto.contains($0)
+                || made.contains($0) || edited.contains($0)
         }
     }
 
