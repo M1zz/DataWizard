@@ -21,11 +21,15 @@ enum CSVParser {
              .replacingOccurrences(of: "\r", with: "\n")
 
         var rows: [[String]] = []
-        var field = ""
+        var field = String.UnicodeScalarView()
         var row: [String] = []
         var inQuotes = false
 
-        let chars = Array(s)
+        // **글자(Character)가 아니라 유니코드 스칼라 단위로 읽는다.**
+        // Swift의 Character는 자소 묶음이라, 쉼표 뒤에 붙은 결합 문자(예: 이름 사이의
+        // U+200D)가 쉼표와 한 덩어리(",\u{200D}")로 묶여 버린다. 그러면 그 쉼표에서
+        // 칸을 나누지 못해 두 칸이 한 칸으로 붙고, 그 줄부터 값이 통째로 한 칸씩 밀렸다.
+        let chars = Array(s.unicodeScalars)
         var i = 0
         while i < chars.count {
             let c = chars[i]
@@ -53,14 +57,14 @@ enum CSVParser {
                     i += 1
                     continue
                 } else if c == "," {
-                    row.append(field)
-                    field = ""
+                    row.append(String(field))
+                    field = String.UnicodeScalarView()
                     i += 1
                     continue
                 } else if c == "\n" {
-                    row.append(field)
+                    row.append(String(field))
                     rows.append(row)
-                    field = ""
+                    field = String.UnicodeScalarView()
                     row = []
                     i += 1
                     continue
@@ -74,7 +78,7 @@ enum CSVParser {
 
         // Flush the final field/row if the file did not end with a newline
         if !field.isEmpty || !row.isEmpty {
-            row.append(field)
+            row.append(String(field))
             rows.append(row)
         }
         return rows

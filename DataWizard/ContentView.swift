@@ -936,6 +936,16 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("데이터 정합성").font(.headline)
             rowCountTable
+            HStack(spacing: 8) {
+                Button("파일 다시 읽기") { reloadWorkFiles() }
+                    .controlSize(.small)
+                    .disabled(isLoadingFiles)
+                    .help("올린 파일을 원본에서 다시 읽어 값만 새로 고칩니다. "
+                          + "정해 둔 컬럼 구성(합친 칸·구분자)은 그대로 이어 갑니다.")
+                Text("값이 한 칸씩 밀려 보이거나 원본이 바뀌었을 때 쓰세요.")
+                    .font(.body).foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+            }
             if let key = keyColumn {
                 Text("같은 행인지 가리는 키: ‘\(key.rawValue)’"
                      + ((base?.generatedKeys ?? 0) > 0
@@ -5297,6 +5307,11 @@ struct ContentView: View {
             if on { confirmedRowKeys.insert(key) } else { confirmedRowKeys.remove(key) }
             preview.confirmedRows = confirmedRowKeys
             scheduleSave()
+        case .confirmRows(let keys, let on):
+            if on { confirmedRowKeys.formUnion(keys) }
+            else { confirmedRowKeys.subtract(keys) }
+            preview.confirmedRows = confirmedRowKeys
+            scheduleSave()
         }
     }
 
@@ -5624,6 +5639,60 @@ struct ContentView: View {
 
 
     /// 숨겨 둔 행까지 포함해 파일을 다시 읽는다 (사용자가 눌렀을 때만).
+    /// 올린 파일을 **원본에서 다시 읽어** 값만 새로 고친다.
+    /// 지금까지 정해 둔 컬럼 구성(합친 칸·구분자·방식)은 그대로 이어 간다.
+    /// (읽기 코드가 고쳐졌을 때 작업을 처음부터 다시 하지 않아도 되게.)
+    private func reloadWorkFiles() {
+        let old = plans
+        guard !old.isEmpty else { return }
+        isLoadingFiles = true
+        loadingNote = "파일을 다시 읽는 중…"
+        DispatchQueue.global(qos: .userInitiated).async {
+            var built: [FilePlan] = []
+            var failure: String?
+            for plan in old {
+                do {
+                    var fresh = try PlanBuilder.passthrough(url: plan.url,
+                                                            includeHidden: plan.includesHiddenRows)
+                    // 사람이 정해 둔 매핑은 되살린다 — 원본에 그 칸이 아직 있을 때만.
+                    let headers = Set(fresh.headers)
+                    for (col, srcs) in plan.sources where srcs.allSatisfy(headers.contains) {
+                        fresh.sources[col] = srcs
+                        fresh.separators[col] = plan.separators[col]
+                        fresh.combine[col] = plan.combine[col]
+                        if !fresh.headers.contains(col.rawValue) {
+                            fresh.headers.append(col.rawValue)
+                        }
+                    }
+                    // 다른 칸으로 옮겨서 없앴던 컬럼은 되살리지 않는다 —
+                    // 지금 쓰고 있는 컬럼 구성 그대로, 값만 새로 읽는 게 목적이다.
+                    let keep = Set(plan.headers)
+                    for h in fresh.headers where !keep.contains(h) {
+                        if let col = UnifiedColumn(rawValue: h) {
+                            fresh.sources[col] = nil
+                            fresh.separators[col] = nil
+                            fresh.combine[col] = nil
+                        }
+                    }
+                    fresh.headers.removeAll { !keep.contains($0) }
+                    built.append(fresh)
+                } catch {
+                    failure = "\(plan.url.lastPathComponent): \(error.localizedDescription)"
+                    break
+                }
+            }
+            let result = built
+            let error = failure
+            DispatchQueue.main.async {
+                isLoadingFiles = false
+                guard error == nil, !result.isEmpty else { errorMessage = error; return }
+                plans = result
+                rebuildWorkColumns()
+                scheduleSave()
+            }
+        }
+    }
+
     private func reloadIncludingHiddenRows() {
         let urls = plans.map(\.url)
         guard !urls.isEmpty else { return }
@@ -8073,32 +8142,54 @@ enum ColumnWorkStatus {
 
 }
 
-/// 표가 가로로 얼마나 밀렸는지 알려 준다.
-/// SwiftUI의 preference로는 값이 올라오지 않아(늘 0이었다) 스크롤뷰에서 직접 읽는다.
+/// 표가 가로로 얼마나 밀렸는지.
+/// 값을 **따로 기억해 두지 않는다** — 표를 다시 만들면 스크롤이 0으로 돌아가는데
+/// 기억해 둔 값은 그대로라, 컬럼을 화면 밖에 그리고 표가 텅 비어 보였다.
+/// 그릴 때마다 스크롤뷰에 직접 물어본다.
+final class TableScroll: ObservableObject {
+    weak var clip: NSClipView?
+    /// 스크롤이 움직였다는 신호 (이 값이 바뀌면 다시 그린다).
+    @Published var tick = 0
+
+    var offsetX: CGFloat { clip?.bounds.origin.x ?? 0 }
+    /// 스크롤뷰를 못 찾았으면 구간을 좁히지 않는다 (컬럼이 사라지는 것보다 느린 게 낫다).
+    var known: Bool { clip != nil }
+}
+
+/// 표가 들어 있는 NSScrollView를 찾아 `TableScroll`에 이어 준다.
 struct ScrollOffsetReader: NSViewRepresentable {
-    let onChange: (CGFloat) -> Void
+    let scroll: TableScroll
 
     final class Coordinator {
         var token: NSObjectProtocol?
+        weak var observed: NSClipView?
         deinit { if let token { NotificationCenter.default.removeObserver(token) } }
     }
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> NSView {
         let view = NSView(frame: .zero)
-        // 붙는 순간엔 아직 스크롤뷰 안에 들어가기 전이라 다음 차례로 미룬다.
-        DispatchQueue.main.async {
-            guard let clip = view.enclosingScrollView?.contentView else { return }
-            clip.postsBoundsChangedNotifications = true
-            context.coordinator.token = NotificationCenter.default.addObserver(
-                forName: NSView.boundsDidChangeNotification, object: clip, queue: .main
-            ) { _ in onChange(clip.bounds.origin.x) }
-            onChange(clip.bounds.origin.x)
-        }
+        DispatchQueue.main.async { attach(view, context.coordinator) }
         return view
     }
 
-    func updateNSView(_ nsView: NSView, context: Context) {}
+    /// 표가 다시 만들어지면 스크롤뷰도 새것으로 바뀔 수 있다 — 그릴 때마다 다시 확인한다.
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async { attach(nsView, context.coordinator) }
+    }
+
+    private func attach(_ view: NSView, _ coordinator: Coordinator) {
+        guard let clip = view.enclosingScrollView?.contentView else { return }
+        guard coordinator.observed !== clip else { return }
+        if let token = coordinator.token { NotificationCenter.default.removeObserver(token) }
+        clip.postsBoundsChangedNotifications = true
+        coordinator.observed = clip
+        scroll.clip = clip
+        coordinator.token = NotificationCenter.default.addObserver(
+            forName: NSView.boundsDidChangeNotification, object: clip, queue: .main
+        ) { [weak scroll] _ in scroll?.tick &+= 1 }
+        scroll.tick &+= 1
+    }
 }
 
 /// Shared state for the standalone preview window. ContentView writes into it
@@ -8149,6 +8240,7 @@ final class PreviewModel: ObservableObject {
         case merge(UnifiedColumn, UnifiedColumn)    // 두 컬럼을 한 칸으로
         case edit(UnifiedColumn, String, String)    // 컬럼 · 이전 값 · 새 값
         case confirmRow(String, Bool)               // 행 이름표 · 확정 여부
+        case confirmRows([String], Bool)           // 여러 행을 한 번에 확정 / 해제
         case fill(UnifiedColumn)                    // 이 칸 채우기 (어디서 → 어떻게)
         /// 여러 컬럼을 골라 ‘데이터 정리하기’를 눌렀을 때 — 틀 안의 칸을 기준으로
         /// 어느 컬럼에서 값을 가져올지 먼저 묻는다.
@@ -8526,13 +8618,10 @@ struct PreviewWindowView: View {
     /// 컬럼 폭 — 머리글 오른쪽 끝을 잡고 끌어서 바꾼다.
     @State private var columnWidths: [String: CGFloat] = [:]
     @State private var widthDrag: (column: String, start: CGFloat)?
-    /// 표가 가로로 얼마나 밀렸는지, 그리고 창이 얼마나 넓은지.
-    /// 이 둘로 ‘지금 그릴 컬럼 구간’을 **한 번만** 정해 모든 줄이 똑같이 쓴다.
-    @State private var hOffset: CGFloat = 0
+    /// 표가 가로로 얼마나 밀렸는지 — 그릴 때마다 스크롤뷰에서 직접 읽는다.
+    /// 이 값과 창 너비로 ‘지금 그릴 컬럼 구간’을 **한 번만** 정해 모든 줄이 똑같이 쓴다.
+    @StateObject private var scroll = TableScroll()
     @State private var viewportWidth: CGFloat = 900
-    /// 스크롤 위치를 실제로 읽을 수 있는가. 못 읽으면 **컬럼을 전부 그린다** —
-    /// 느려질지언정 컬럼이 안 보이는 일은 없어야 한다.
-    @State private var offsetKnown = false
     private static let defaultColumnWidth: CGFloat = 190
 
     private func width(_ c: UnifiedColumn) -> CGFloat {
@@ -8636,11 +8725,37 @@ struct PreviewWindowView: View {
                 Text("결과를 다시 만드는 중…").font(.body).foregroundStyle(.secondary)
             }
         }
-        if !model.confirmedRows.isEmpty {
-            Label("확정 \(model.confirmedRows.count) / \(model.rows.count)행",
-                  systemImage: "checkmark.seal.fill")
-                .font(.body.weight(.medium)).foregroundStyle(.green)
-                .help("행 왼쪽의 동그라미를 눌러 ‘다 봤다’고 표시한 행 수입니다.")
+        if !model.rows.isEmpty {
+            let done = model.confirmedRows.count
+            Menu {
+                Button("보이는 행 모두 확정 (\(visibleRows.count)행)") {
+                    model.request = .confirmRows(visibleRows.map { model.rowKey($0.0) }, true)
+                }
+                if visibleRows.count != model.rows.count {
+                    Button("전체 \(model.rows.count)행 모두 확정") {
+                        model.request = .confirmRows(
+                            (0..<model.rows.count).map { model.rowKey($0) }, true)
+                    }
+                }
+                Divider()
+                Button("보이는 행 확정 해제") {
+                    model.request = .confirmRows(visibleRows.map { model.rowKey($0.0) }, false)
+                }
+                .disabled(done == 0)
+                Button("확정 전부 해제") {
+                    model.request = .confirmRows(
+                        (0..<model.rows.count).map { model.rowKey($0) }, false)
+                }
+                .disabled(done == 0)
+            } label: {
+                Label("확정 \(done) / \(model.rows.count)행",
+                      systemImage: done == model.rows.count && done > 0
+                        ? "checkmark.seal.fill" : "checkmark.seal")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .foregroundStyle(done == model.rows.count && done > 0 ? Color.green : .secondary)
+            .help("‘다 봤다’고 표시한 행 수입니다. 눌러서 한 번에 확정하거나 해제할 수 있어요.")
         }
         if model.diffCount > 0 {
             Label("개선된 셀 \(model.diffCount)개", systemImage: "sparkles")
@@ -9153,11 +9268,7 @@ struct PreviewWindowView: View {
                     }
                     // 가로로 얼마나 밀렸는지 — 모든 줄이 **같은 컬럼 구간**을 그리게 하려면
                     // 이 값이 필요하다 (줄마다 제 나름대로 재면 줄이 어긋난다).
-                    .background(ScrollOffsetReader { x in
-                        offsetKnown = true
-                        // 반 컬럼쯤 움직였을 때만 구간을 다시 잡는다 (매 픽셀 갱신은 낭비).
-                        if abs(x - hOffset) > 60 { hOffset = x }
-                    }.frame(width: 0, height: 0))
+                    .background(ScrollOffsetReader(scroll: scroll).frame(width: 0, height: 0))
                 }
                 .onChange(of: jumpColumn) { name in
                     guard let name else { return }
@@ -9178,8 +9289,10 @@ struct PreviewWindowView: View {
         let cols = shownColumns
         guard !cols.isEmpty else { return (0..<0, 0) }
         // 스크롤 위치를 못 읽는 상황이면 좁히지 않는다 (안 보이는 컬럼이 생기는 것보다 낫다).
-        guard offsetKnown else { return (0..<cols.count, 0) }
-        let from = max(0, hOffset - gutterWidth)
+        guard scroll.known else { return (0..<cols.count, 0) }
+        // 스크롤뷰에 지금 값을 물어본다 (`tick`이 바뀔 때마다 다시 그려진다).
+        _ = scroll.tick
+        let from = max(0, min(scroll.offsetX, tableWidth) - gutterWidth)
         let to = from + max(viewportWidth, 400)
 
         // 배열을 만들지 않고 훑는다 — 줄마다 다시 계산되는 자리라 가벼워야 한다.
