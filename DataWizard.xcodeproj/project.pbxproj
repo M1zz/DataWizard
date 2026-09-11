@@ -25,6 +25,9 @@
 		CC02DD1BEE13FF0405060711 /* ColumnMatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC12DD3BEE43FF4455660711 /* ColumnMatcher.swift */; };
 		CC01DD0CEE03FF0405060712 /* ExampleRuleSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC11DD2CEE33FF4455660712 /* ExampleRuleSheet.swift */; };
 		CC01DD0DEE03FF0405060713 /* XLSXWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC11DD2DEE33FF4455660713 /* XLSXWriter.swift */; };
+		CC01DD10EE03FF0405060716 /* PreviewWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC11DD30EE33FF4455660716 /* PreviewWindow.swift */; };
+		CC01DD11EE03FF0405060717 /* ReviewViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC11DD31EE33FF4455660717 /* ReviewViews.swift */; };
+		CC01DD12EE03FF0405060718 /* CleanupSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC11DD32EE33FF4455660718 /* CleanupSheets.swift */; };
 		CC01DD0BEE03FF0405060711 /* RuleInference.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC11DD2BEE33FF4455660711 /* RuleInference.swift */; };
 		FA01FA02FA03FA04FA05FA06 /* MappingPresets.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA11FA22FA33FA44FA55FA66 /* MappingPresets.swift */; };
 		CC01DD03EE03FF0405060702 /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC11DD23EE33FF4455660702 /* AppSettings.swift */; };
@@ -49,6 +52,9 @@
 		CC12DD3BEE43FF4455660711 /* ColumnMatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ColumnMatcher.swift"; sourceTree = "<group>"; };
 		CC11DD2CEE33FF4455660712 /* ExampleRuleSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ExampleRuleSheet.swift"; sourceTree = "<group>"; };
 		CC11DD2DEE33FF4455660713 /* XLSXWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "XLSXWriter.swift"; sourceTree = "<group>"; };
+		CC11DD30EE33FF4455660716 /* PreviewWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PreviewWindow.swift"; sourceTree = "<group>"; };
+		CC11DD31EE33FF4455660717 /* ReviewViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ReviewViews.swift"; sourceTree = "<group>"; };
+		CC11DD32EE33FF4455660718 /* CleanupSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CleanupSheets.swift"; sourceTree = "<group>"; };
 		CC11DD2BEE33FF4455660711 /* RuleInference.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "RuleInference.swift"; sourceTree = "<group>"; };
 		FA11FA22FA33FA44FA55FA66 /* MappingPresets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MappingPresets.swift"; sourceTree = "<group>"; };
 		CC11DD23EE33FF4455660702 /* AppSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppSettings.swift"; sourceTree = "<group>"; };
@@ -87,6 +93,9 @@
 			CC12DD3BEE43FF4455660711 /* ColumnMatcher.swift */,
 			CC11DD2CEE33FF4455660712 /* ExampleRuleSheet.swift */,
 			CC11DD2DEE33FF4455660713 /* XLSXWriter.swift */,
+			CC11DD30EE33FF4455660716 /* PreviewWindow.swift */,
+			CC11DD31EE33FF4455660717 /* ReviewViews.swift */,
+			CC11DD32EE33FF4455660718 /* CleanupSheets.swift */,
 			CC11DD2BEE33FF4455660711 /* RuleInference.swift */,
 			FA11FA22FA33FA44FA55FA66 /* MappingPresets.swift */,
 			CC11DD23EE33FF4455660702 /* AppSettings.swift */,
@@ -133,6 +142,9 @@
 				CC02DD1BEE13FF0405060711 /* ColumnMatcher.swift in Sources */,
 				CC01DD0CEE03FF0405060712 /* ExampleRuleSheet.swift in Sources */,
 				CC01DD0DEE03FF0405060713 /* XLSXWriter.swift in Sources */,
+				CC01DD10EE03FF0405060716 /* PreviewWindow.swift in Sources */,
+				CC01DD11EE03FF0405060717 /* ReviewViews.swift in Sources */,
+				CC01DD12EE03FF0405060718 /* CleanupSheets.swift in Sources */,
 				CC01DD0BEE03FF0405060711 /* RuleInference.swift in Sources */,
 				FA01FA02FA03FA04FA05FA06 /* MappingPresets.swift in Sources */,
 				CC01DD03EE03FF0405060702 /* AppSettings.swift in Sources */,

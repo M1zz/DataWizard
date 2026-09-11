@@ -96,6 +96,22 @@ struct FilePlan: Identifiable {
     }
 }
 
+extension FilePlan {
+    /// 이 컬럼의 **값 예시** — 비지 않은 값을 앞에서부터 중복 없이 몇 개.
+    /// (창마다 따로 긁어 오던 것을 한 군데로 모았다.)
+    func sampleValues(_ col: UnifiedColumn, limit: Int = 3, scan: Int = 120) -> [String] {
+        guard limit > 0, isMapped(col) else { return [] }
+        var out: [String] = []
+        for row in rows.prefix(scan) {
+            let v = compose(col, from: row)
+            guard !v.isEmpty, !out.contains(v) else { continue }
+            out.append(v)
+            if out.count >= limit { break }
+        }
+        return out
+    }
+}
+
 /// Detects how a file holds applicant names: a single full-name column, or a
 /// surname column plus a given-name column. Used only to seed the default
 /// column-source combination for the name field.

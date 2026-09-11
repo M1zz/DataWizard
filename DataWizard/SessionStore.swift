@@ -135,3 +135,45 @@ enum SessionStore {
         return FileManager.default.fileExists(atPath: url.path)
     }
 }
+
+/// 컬럼을 키로 쓰는 표를 세션에 담고 꺼낼 때 쓰는 변환.
+/// 세션을 만들고 되살리는 코드에 `Dictionary(uniqueKeysWithValues:)`가
+/// 스무 번 넘게 반복되던 것을 한 군데로 모았다.
+enum ColumnCoding {
+
+    // MARK: 담기 (컬럼 → 글자 키)
+
+    static func encode<V>(_ map: [UnifiedColumn: V]) -> [String: V] {
+        Dictionary(uniqueKeysWithValues: map.map { ($0.key.rawValue, $0.value) })
+    }
+
+    static func encode<V: RawRepresentable>(_ map: [UnifiedColumn: V]) -> [String: V.RawValue] {
+        Dictionary(uniqueKeysWithValues: map.map { ($0.key.rawValue, $0.value.rawValue) })
+    }
+
+    static func encode(_ columns: [UnifiedColumn]) -> [String] { columns.map(\.rawValue) }
+    static func encode(_ columns: Set<UnifiedColumn>) -> [String] { columns.map(\.rawValue) }
+
+    // MARK: 꺼내기 (글자 키 → 컬럼)
+
+    /// 이름을 컬럼으로 되돌리지 못하는 항목은 조용히 버린다 (예전 세션 호환).
+    static func decode<V>(_ map: [String: V]?) -> [UnifiedColumn: V] {
+        Dictionary(uniqueKeysWithValues: (map ?? [:]).compactMap { key, value in
+            UnifiedColumn(rawValue: key).map { ($0, value) }
+        })
+    }
+
+    static func decode<V: RawRepresentable>(_ map: [String: V.RawValue]?,
+                                            as type: V.Type) -> [UnifiedColumn: V] {
+        Dictionary(uniqueKeysWithValues: (map ?? [:]).compactMap { key, raw in
+            guard let col = UnifiedColumn(rawValue: key), let v = V(rawValue: raw) else { return nil }
+            return (col, v)
+        })
+    }
+
+    static func decode(_ names: [String]?) -> [UnifiedColumn] {
+        (names ?? []).compactMap { UnifiedColumn(rawValue: $0) }
+    }
+
+    static func decodeSet(_ names: [String]?) -> Set<UnifiedColumn> { Set(decode(names)) }
+}

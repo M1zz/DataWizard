@@ -1307,3 +1307,17 @@ Korea Advanced Institute of Science … → 'Korea '
 - [x] 도구 창은 **작업 창 위에** 열리고, 닫으면 **작업 창으로 되돌아온다**
       (`dismissTopSheet` — 맨 위 창 하나만 닫는다)
 - 확인: 작업 창 → 도구 창 → 닫기 → 작업 창 복귀까지 캡처로 확인
+
+## 코드 정리 (동작은 그대로)
+- [x] `ContentView.swift` **9,871줄 → 6,400줄**. 통째로 옮겨 세 파일로 나눔:
+      · `PreviewWindow.swift` — 완성본 미리보기 창 (PreviewModel · TableScroll · 표 그리기)
+      · `CleanupSheets.swift` — 값을 손보는 창들 (값 훑어보기 · 패턴 · 매핑표 · 원본 칸 고르기 · 파일 보기)
+      · `ReviewViews.swift` — 컬럼 검토 카드와 본문들
+- [x] **값 예시 뽑는 코드 네 벌 → `FilePlan.sampleValues(_:limit:scan:)` 하나**
+      (창마다 `prefix(50)`·`prefix(60)`·`prefix(80)`로 제각각이던 것)
+- [x] **세션 담기/꺼내기 → `ColumnCoding`** — `Dictionary(uniqueKeysWithValues:)` 스물네 벌이
+      일곱으로. 이름을 컬럼으로 못 되돌리는 항목은 조용히 버린다(예전 세션 호환)
+- [x] 컬럼별 빈 칸 수를 **캐시에 한 번만** 만들어 돌려쓴다 (`WorkCache.holeByColumn`) —
+      창 세 곳에서 매번 다시 만들고 있었다
+- 확인 (헤드리스 9가지 전부 통과): CSV 스칼라 파싱 · 실제 파일 248행 65컬럼 ·
+  값 예시 · 합치기 방식 · 행 수 보존 · 값 매핑 79건 · 세션 왕복 · xlsx 왕복
