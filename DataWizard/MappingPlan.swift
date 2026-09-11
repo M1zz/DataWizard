@@ -14,6 +14,10 @@ struct FilePlan: Identifiable {
     var rows: [[String: String]]                // every parsed row, header-keyed
     var sources: [UnifiedColumn: [String]]      // unified field -> ordered source columns
     var separators: [UnifiedColumn: String]     // join string between combined sources ("")
+    /// 시트에 숨겨져 있어 빼 둔 줄 수 (엑셀·넘버스에서 필터로 감춘 줄).
+    var hiddenRowsSkipped = 0
+    /// 숨겨진 줄까지 읽어 들였는가.
+    var includesHiddenRows = false
     /// 파일 하나를 그대로 고치는 유틸 모드에서 만든 계획인가.
     /// true면 아카데미 전용 보정(‘그 외 국가’ 치환 등)을 건너뛰고 값을 있는 그대로 읽는다.
     var passthrough = false
@@ -176,12 +180,15 @@ enum PlanBuilder {
 
     /// 파일 하나를 있는 그대로 다루는 계획 — 헤더가 곧 컬럼이고, 값은 변형 없이 읽는다.
     /// 유틸 모드(‘고칠 파일 + 고칠 컬럼’)의 출발점.
-    static func passthrough(url: URL) throws -> FilePlan {
+    static func passthrough(url: URL, includeHidden: Bool = false) throws -> FilePlan {
         let table: (headers: [String], rows: [[String: String]])
+        var hiddenSkipped = 0
         if url.pathExtension.lowercased() == "xlsx" {
-            // 첫 줄에 파일 제목만 있는 내보내기 파일이 흔하다 — 머리글 줄을 스스로 찾는다.
-            let t = try XLSXReader.readTableAutoHeader(at: url)
+            // 첫 줄이 제목뿐인 파일이 흔해 머리글 줄을 스스로 찾고,
+            // 시트에서 숨겨 둔 줄(필터로 감춘 줄)은 화면에서 보이는 대로 빼고 읽는다.
+            let t = try XLSXReader.readVisibleTable(at: url, includeHidden: includeHidden)
             table = (t.headers, t.rows)
+            hiddenSkipped = t.hiddenSkipped
         } else {
             table = try CSVParser.readTable(at: url)
         }
@@ -191,7 +198,9 @@ enum PlanBuilder {
             sources[col] = [h]
         }
         return FilePlan(url: url, channel: .simple, headers: table.headers, rows: table.rows,
-                        sources: sources, separators: [:], passthrough: true)
+                        sources: sources, separators: [:],
+                        hiddenRowsSkipped: hiddenSkipped, includesHiddenRows: includeHidden,
+                        passthrough: true)
     }
 
     private static func readTable(url: URL, channel: Channel) throws -> (headers: [String], rows: [[String: String]]) {

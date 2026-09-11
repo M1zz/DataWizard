@@ -443,7 +443,10 @@ struct ContentView: View {
                                     Text(plan.fileName)
                                         .font(.body.weight(.medium))
                                         .lineLimit(1).truncationMode(.middle)
-                                    Text("\(plan.rows.count)행 · \(plan.headers.count)컬럼 · 눌러서 보기")
+                                    Text("\(plan.rows.count)행 · \(plan.headers.count)컬럼"
+                                         + (plan.hiddenRowsSkipped > 0
+                                            ? " · 숨긴 행 \(plan.hiddenRowsSkipped)개 제외" : "")
+                                         + " · 눌러서 보기")
                                         .font(.body).foregroundStyle(.secondary)
                                 }
                             }
@@ -1687,6 +1690,20 @@ struct ContentView: View {
                     openPreviewWindow()
                 })]))
         }
+        let hiddenTotal = plans.reduce(0) { $0 + $1.hiddenRowsSkipped }
+        if hiddenTotal > 0 {
+            let names = plans.filter { $0.hiddenRowsSkipped > 0 }
+                .map { "\($0.fileName) \($0.hiddenRowsSkipped)행" }
+                .joined(separator: " · ")
+            out.append(MergeStep(
+                id: "hidden",
+                symbol: "eye.slash", tint: .accentColor,
+                title: "시트에서 숨겨 둔 행 \(hiddenTotal)개는 빼고 읽었어요",
+                detail: names + "\n엑셀·넘버스에서 감춰 둔 줄이라, 화면에서 보이던 대로 읽었습니다. "
+                    + "원본 전체가 필요하면 아래 버튼으로 다시 읽어 올 수 있어요.",
+                actionTitle: "숨긴 행도 포함해서 다시 읽기",
+                action: { reloadIncludingHiddenRows() }))
+        }
         let empties = emptyColumns
         if let first = empties.first {
             let hint = empties.compactMap { c -> String? in
@@ -1785,6 +1802,14 @@ struct ContentView: View {
                         .lineLimit(1).truncationMode(.middle)
                     Spacer(minLength: 8)
                     Text("\(plan.rows.count)행")
+                        .font(.body.monospacedDigit()).foregroundStyle(.secondary)
+                }
+            }
+            if plans.contains(where: { $0.hiddenRowsSkipped > 0 }) {
+                HStack(spacing: 6) {
+                    Text("시트에서 숨겨져 있어 뺀 행").font(.body).foregroundStyle(.secondary)
+                    Spacer(minLength: 8)
+                    Text("\(plans.reduce(0) { $0 + $1.hiddenRowsSkipped })행")
                         .font(.body.monospacedDigit()).foregroundStyle(.secondary)
                 }
             }
@@ -5011,6 +5036,33 @@ struct ContentView: View {
         }
     }
 
+
+    /// 숨겨 둔 행까지 포함해 파일을 다시 읽는다 (사용자가 눌렀을 때만).
+    private func reloadIncludingHiddenRows() {
+        let urls = plans.map(\.url)
+        guard !urls.isEmpty else { return }
+        isLoadingFiles = true
+        loadingNote = "숨긴 행까지 다시 읽는 중…"
+        DispatchQueue.global(qos: .userInitiated).async {
+            var built: [FilePlan] = []
+            var failure: String?
+            for url in urls {
+                do { built.append(try PlanBuilder.passthrough(url: url, includeHidden: true)) }
+                catch { failure = "\(url.lastPathComponent): \(error.localizedDescription)"; break }
+            }
+            let result = built
+            let error = failure
+            DispatchQueue.main.async {
+                isLoadingFiles = false
+                guard error == nil, !result.isEmpty else {
+                    errorMessage = error
+                    return
+                }
+                plans = result
+                rebuildWorkColumns()
+            }
+        }
+    }
 
     /// 행을 걸러 낼 만한 컬럼 — 값이 몇 종류뿐인 ‘상태’ 같은 컬럼.
     private var filterCandidates: [UnifiedColumn] { cache.filterCandidates }

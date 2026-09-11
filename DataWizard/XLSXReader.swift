@@ -32,6 +32,48 @@ enum XLSXReader {
         return parseSheet(data: sheetData, sharedStrings: sharedStrings)
     }
 
+    /// 숨김 여부까지 함께 읽는다 — 엑셀·넘버스에서 필터로 감춰 둔 줄을 그대로 존중하기 위해.
+    static func readGridWithHidden(at url: URL) throws -> (grid: [[String]], hidden: [Bool]) {
+        let parts = try MiniZip.entries(of: url)
+        let sharedStrings = parseSharedStrings(parts: parts)
+        guard let sheetData = parts["xl/worksheets/sheet1.xml"] else { throw XLSXError.noWorksheet }
+        return parseSheetWithHidden(data: sheetData, sharedStrings: sharedStrings)
+    }
+
+    /// 머리글 줄을 스스로 찾아 읽되, **시트에서 숨겨진 줄은 빼고** 읽는다.
+    /// (빼기 전에 몇 줄을 뺐는지 `hiddenSkipped`로 알려 준다 — 사용자가 되돌릴 수 있게.)
+    static func readVisibleTable(at url: URL, includeHidden: Bool = false)
+        throws -> (headers: [String], rows: [[String: String]], headerRow: Int, hiddenSkipped: Int) {
+        let (grid, hidden) = try readGridWithHidden(at: url)
+        guard !grid.isEmpty else { return ([], [], 0, 0) }
+
+        func filled(_ row: [String]) -> Int {
+            row.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.count
+        }
+        var headerRow = 0
+        var bestScore = filled(grid[0])
+        for i in 1..<min(grid.count, 5) where filled(grid[i]) > bestScore {
+            headerRow = i
+            bestScore = filled(grid[i])
+        }
+
+        let header = grid[headerRow]
+        var rows: [[String: String]] = []
+        var skipped = 0
+        for i in (headerRow + 1)..<grid.count {
+            let r = grid[i]
+            if r.allSatisfy({ $0.trimmingCharacters(in: .whitespaces).isEmpty }) { continue }
+            if !includeHidden, i < hidden.count, hidden[i] {
+                skipped += 1
+                continue
+            }
+            var dict: [String: String] = [:]
+            for (idx, key) in header.enumerated() { dict[key] = idx < r.count ? r[idx] : "" }
+            rows.append(dict)
+        }
+        return (header, rows, headerRow, skipped)
+    }
+
     /// Read a worksheet into its ordered header plus header-keyed rows,
     /// given which row holds the header.
     static func readTable(at url: URL, headerRowIndex: Int) throws -> (headers: [String], rows: [[String: String]]) {
@@ -88,6 +130,15 @@ enum XLSXReader {
 
     // MARK: - worksheet xml
 
+    private static func parseSheetWithHidden(data: Data,
+                                            sharedStrings: [String]) -> (grid: [[String]], hidden: [Bool]) {
+        let delegate = SheetParser(sharedStrings: sharedStrings)
+        let parser = XMLParser(data: data)
+        parser.delegate = delegate
+        parser.parse()
+        return (delegate.grid, delegate.hidden)
+    }
+
     private static func parseSheet(data: Data, sharedStrings: [String]) -> [[String]] {
         let parser = SheetParser(sharedStrings: sharedStrings)
         let xml = XMLParser(data: data)
@@ -125,7 +176,10 @@ private final class SharedStringsParser: NSObject, XMLParserDelegate {
 private final class SheetParser: NSObject, XMLParserDelegate {
     let sharedStrings: [String]
     var grid: [[String]] = []
+    /// 각 줄이 시트에서 숨겨져 있는지 (엑셀·넘버스에서 필터로 감춘 줄).
+    var hidden: [Bool] = []
 
+    private var rowHidden = false
     private var currentRow: [String: String] = [:]   // column letter -> value
     private var maxColIndex = 0
     private var cellType = ""        // "s" = shared string, "" = number, "str"/"inlineStr"
@@ -142,6 +196,7 @@ private final class SheetParser: NSObject, XMLParserDelegate {
         switch elementName {
         case "row":
             currentRow = [:]
+            rowHidden = (attributeDict["hidden"] == "1" || attributeDict["hidden"] == "true")
         case "c":
             cellType = attributeDict["t"] ?? ""
             cellRef = attributeDict["r"] ?? ""
@@ -184,6 +239,7 @@ private final class SheetParser: NSObject, XMLParserDelegate {
                 if idx < arr.count { arr[idx] = val }
             }
             grid.append(arr)
+            hidden.append(rowHidden)
         default:
             break
         }
