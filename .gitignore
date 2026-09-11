@@ -19,3 +19,6 @@ xcuserdata/
 
 # Misc
 *.swp
+
+# 배포용 패키지
+dist/

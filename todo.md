@@ -1198,3 +1198,11 @@ stage: work | files: 3 | templateColumns: 67 | keyColumn: Code | base rows: 336
 - [x] 값이 차 있는 컬럼 머리글에 **`값 정리`** 링크 — 오타·형식을 바로 손보러 간다
       (정리할 값이 남았으면 `정리할 값 N종`으로 주황색)
 - [x] 통째로 빈 컬럼도 ‘채울 것’으로 친다 (틀 밖이라 빈 행 수를 세지 않던 컬럼 포함)
+
+## 설치용 패키지
+- [x] `scripts/package.sh` — Release 빌드 → 서명 → **끌어다 놓는 .dmg** 한 번에
+      (`dist/DataWizard-1.0.dmg`, 2.8MB). 이미지 안에 `데이터 마법사.app` · `Applications` 바로가기 ·
+      `처음 열 때 읽어 주세요.txt`
+- [x] 서명은 지금 가진 개발용 인증서로. **애플 공증은 못 받았다** (Developer ID 인증서가 없음)
+      → 받는 사람은 처음 한 번만 오른쪽 클릭 → 열기. 안내문을 이미지에 넣어 뒀다
+- [x] `dist/`는 저장소에 올리지 않는다 (.gitignore)
