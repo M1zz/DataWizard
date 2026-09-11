@@ -833,19 +833,30 @@ struct FillFromSheet: View {
     let selectedOutside: [UnifiedColumn]
     /// 대상 컬럼 → 가져올 만한 후보들.
     let candidates: [UnifiedColumn: [Candidate]]
-    let onApply: (_ pairs: [(target: UnifiedColumn, source: UnifiedColumn)]) -> Void
+    /// 대상마다 **여러 컬럼을 순서대로** 합쳐 넣을 수 있다 (성 + 이름 → 김 철수).
+    let onApply: (_ plans: [(target: UnifiedColumn,
+                             sources: [UnifiedColumn],
+                             separator: String)]) -> Void
     /// 가져올 컬럼이 없을 때 — 패턴(고정값·번호 매기기)을 만들어 자동으로 채운다.
     let onGenerate: (UnifiedColumn) -> Void
     /// 값을 가져오는 게 아니라, 이미 있는 값의 오타·표기만 손보러 갈 때.
     let onCleanOnly: () -> Void
     let onClose: () -> Void
 
-    /// 대상 → 고른 출처 (안 고르면 그대로 둔다).
-    @State private var pick: [UnifiedColumn: UnifiedColumn] = [:]
+    /// 대상 → 고른 출처들 (고른 순서가 곧 붙는 순서).
+    @State private var pick: [UnifiedColumn: [UnifiedColumn]] = [:]
+    /// 대상 → 사이에 넣을 글자 (둘 이상 골랐을 때만 쓴다).
+    @State private var sep: [UnifiedColumn: String] = [:]
     @State private var didSeed = false
 
-    private var chosen: [(target: UnifiedColumn, source: UnifiedColumn)] {
-        targets.compactMap { t in pick[t].map { (target: t, source: $0) } }
+    private func sources(_ t: UnifiedColumn) -> [UnifiedColumn] { pick[t] ?? [] }
+    private func separator(_ t: UnifiedColumn) -> String { sep[t] ?? " " }
+
+    private var chosen: [(target: UnifiedColumn, sources: [UnifiedColumn], separator: String)] {
+        targets.compactMap { t in
+            let list = sources(t)
+            return list.isEmpty ? nil : (target: t, sources: list, separator: separator(t))
+        }
     }
 
     var body: some View {
@@ -853,21 +864,16 @@ struct FillFromSheet: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("틀 안의 칸을 어디서 채울까요?").font(.title2.weight(.bold))
                 Text("고른 컬럼 중 틀 안의 \(targets.count)개를 기준으로 세웠어요. "
-                     + "칸마다 값을 가져올 컬럼을 고르면, 그 값이 이 칸으로 옮겨집니다. "
+                     + "칸마다 값을 가져올 컬럼을 고르면 그 값이 이 칸으로 옮겨집니다. "
                      + "행 수는 그대로예요 — 값이 자리를 옮길 뿐입니다.")
                     .font(.body).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                Text("가져올 컬럼이 없는 칸은 오른쪽 ‘패턴으로 채우기’로 "
-                     + "같은 값이나 번호를 만들어 넣을 수 있어요.")
+                // ‘+’로 이어 붙인 문자열엔 마크다운이 먹지 않는다 — 강조 없이 또렷한 문장으로.
+                Text("둘 이상 고르면 사이에 무엇을 넣을지 정해 한 칸으로 붙습니다 "
+                     + "— 국문 성 + 국문 이름 → 김 철수. "
+                     + "가져올 컬럼이 아예 없으면 ‘패턴으로 채우기’로 같은 값이나 번호를 만들어 넣으세요.")
                     .font(.body).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                if !selectedOutside.isEmpty {
-                    Text("함께 고른 틀 밖 컬럼: "
-                         + selectedOutside.prefix(6).map(\.rawValue).joined(separator: " · ")
-                         + (selectedOutside.count > 6 ? " 외 \(selectedOutside.count - 6)개" : ""))
-                        .font(.body).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
             }
 
             ScrollView {
@@ -877,7 +883,7 @@ struct FillFromSheet: View {
                     }
                 }
             }
-            .frame(maxHeight: 360)
+            .frame(maxHeight: 400)
 
             HStack(spacing: 10) {
                 Button("이미 있는 값의 오타·표기 정리…") { onCleanOnly() }
@@ -894,7 +900,7 @@ struct FillFromSheet: View {
             }
         }
         .padding(20)
-        .frame(width: 720)
+        .frame(width: 780)
         .onAppear { if !didSeed { seed(); didSeed = true } }
     }
 
@@ -902,8 +908,8 @@ struct FillFromSheet: View {
     private func targetRow(_ t: UnifiedColumn) -> some View {
         let list = candidates[t] ?? []
         let blank = holes[t] ?? 0
-        let sample = pick[t].flatMap { p in list.first { $0.column == p }?.samples.first }
-        return VStack(alignment: .leading, spacing: 4) {
+        let picked = sources(t)
+        return VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(t.rawValue).font(.body.weight(.semibold))
@@ -912,44 +918,131 @@ struct FillFromSheet: View {
                         .font(.body).monospacedDigit()
                         .foregroundStyle(blank > 0 ? Color.accentColor : .secondary)
                 }
-                .frame(width: 240, alignment: .leading)
+                .frame(width: 220, alignment: .leading)
 
                 Image(systemName: "arrow.left").foregroundStyle(.secondary)
 
-                Picker("", selection: Binding(get: { pick[t] },
-                                              set: { pick[t] = $0 })) {
-                    Text("그대로 두기").tag(UnifiedColumn?.none)
-                    ForEach(list) { c in
-                        Text(c.percent.map { "\(c.column.rawValue) — \($0)% 닮음" }
-                             ?? c.column.rawValue)
-                            .tag(UnifiedColumn?.some(c.column))
+                // 여러 개를 고를 수 있는 메뉴 — 고른 순서대로 붙는다.
+                Menu {
+                    if picked.isEmpty == false {
+                        Button("고른 것 모두 빼기") { pick[t] = [] }
+                        Divider()
                     }
+                    // 함께 체크해 온 컬럼을 맨 위에 따로 — 100개 넘는 목록에서 찾아 헤매지 않게.
+                    let near = list.filter { selectedOutside.contains($0.column) }
+                    let rest = list.filter { !selectedOutside.contains($0.column) }
+                    if !near.isEmpty {
+                        Section("함께 고른 컬럼") {
+                            ForEach(near) { c in candidateButton(t, c, picked) }
+                        }
+                    }
+                    Section(near.isEmpty ? "" : "그 밖의 컬럼") {
+                        ForEach(rest) { c in candidateButton(t, c, picked) }
+                    }
+                } label: {
+                    Text(menuLabel(t))
+                        .lineLimit(1).truncationMode(.tail)
                 }
-                .labelsHidden()
-                .frame(maxWidth: .infinity)
                 .disabled(list.isEmpty)
+                .frame(maxWidth: .infinity)
 
-                // 가져올 데가 없는 칸(예: 지원연도·구분처럼 원본에 아예 없는 값)은
-                // 패턴을 만들어 채운다 — 같은 값 한 번에, 또는 6F10001부터 번호 매기기.
                 Button("패턴으로 채우기…") { onGenerate(t) }
                     .fixedSize()
                     .help("모든 행에 같은 값을 넣거나, 첫 번호를 적어 1씩 올라가는 번호를 만들어 넣습니다.")
             }
-            if let sample, !sample.isEmpty {
-                Text("예: \(sample)")
-                    .font(.body).foregroundStyle(.secondary)
+
+            if picked.count >= 2 {
+                // 붙는 순서와 사이 글자 — 바로 아래에 결과 예시가 따라온다.
+                HStack(spacing: 6) {
+                    ForEach(Array(picked.enumerated()), id: \.element) { idx, col in
+                        HStack(spacing: 3) {
+                            Text("\(idx + 1).").font(.body.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                            Text(col.rawValue).font(.body).lineLimit(1)
+                            Button { move(t, idx, -1) } label: { Image(systemName: "chevron.left") }
+                                .buttonStyle(.plain).disabled(idx == 0)
+                            Button { move(t, idx, 1) } label: { Image(systemName: "chevron.right") }
+                                .buttonStyle(.plain).disabled(idx == picked.count - 1)
+                            Button { toggle(t, col) } label: { Image(systemName: "xmark") }
+                                .buttonStyle(.plain)
+                        }
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Capsule().fill(Color.accentColor.opacity(0.12)))
+                    }
+                    Text("사이에").font(.body).foregroundStyle(.secondary)
+                    sepChip(t, "붙여쓰기", "")
+                    sepChip(t, "공백", " ")
+                    sepChip(t, "쉼표", ", ")
+                    sepChip(t, "하이픈", "-")
+                    Spacer(minLength: 0)
+                }
+                .padding(.leading, 228)
+            }
+
+            if !picked.isEmpty {
+                Text("이렇게 들어갑니다 → \(previewLine(t))")
+                    .font(.body.weight(.medium)).foregroundStyle(Color.accentColor)
                     .lineLimit(1).truncationMode(.tail)
-                    .padding(.leading, 248)
+                    .padding(.leading, 228)
             } else if list.isEmpty {
-                Text("가져올 만한 컬럼을 못 찾았어요 — 표에서 그 컬럼도 같이 골라 주세요.")
+                Text("가져올 만한 컬럼을 못 찾았어요 — 표에서 그 컬럼도 같이 고르거나, 패턴으로 채우세요.")
                     .font(.body).foregroundStyle(.secondary)
-                    .padding(.leading, 248)
+                    .padding(.leading, 228)
             }
         }
-        .padding(.vertical, 6).padding(.horizontal, 10)
+        .padding(.vertical, 8).padding(.horizontal, 10)
         .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .fill(pick[t] == nil ? Color.primary.opacity(0.03)
+            .fill(picked.isEmpty ? Color.primary.opacity(0.03)
                                  : Color.accentColor.opacity(0.08)))
+    }
+
+    private func candidateButton(_ t: UnifiedColumn, _ c: Candidate,
+                                 _ picked: [UnifiedColumn]) -> some View {
+        Button { toggle(t, c.column) } label: {
+            Label(c.percent.map { "\(c.column.rawValue) — \($0)% 닮음" } ?? c.column.rawValue,
+                  systemImage: picked.contains(c.column) ? "checkmark" : "")
+        }
+    }
+
+    private func menuLabel(_ t: UnifiedColumn) -> String {
+        let picked = sources(t)
+        if picked.isEmpty { return (candidates[t] ?? []).isEmpty ? "가져올 곳 없음" : "가져올 컬럼 고르기…" }
+        if picked.count == 1 { return picked[0].rawValue }
+        return picked.map(\.rawValue).joined(separator: " + ")
+    }
+
+    /// 고른 컬럼들의 첫 예시 값을 실제로 붙여 본 결과.
+    private func previewLine(_ t: UnifiedColumn) -> String {
+        let list = candidates[t] ?? []
+        let parts = sources(t).compactMap { col in
+            list.first { $0.column == col }?.samples.first
+        }.filter { !$0.isEmpty }
+        return parts.isEmpty ? "—" : parts.joined(separator: separator(t))
+    }
+
+    private func sepChip(_ t: UnifiedColumn, _ title: String, _ value: String) -> some View {
+        let on = separator(t) == value
+        return Button(title) { sep[t] = value }
+            .buttonStyle(.plain)
+            .font(.body.weight(on ? .semibold : .regular))
+            .foregroundStyle(on ? Color.accentColor : .secondary)
+            .padding(.horizontal, 7).padding(.vertical, 2)
+            .background(Capsule().fill(on ? Color.accentColor.opacity(0.16)
+                                          : Color.primary.opacity(0.06)))
+    }
+
+    private func toggle(_ t: UnifiedColumn, _ col: UnifiedColumn) {
+        var list = sources(t)
+        if let i = list.firstIndex(of: col) { list.remove(at: i) } else { list.append(col) }
+        pick[t] = list
+    }
+
+    private func move(_ t: UnifiedColumn, _ idx: Int, _ delta: Int) {
+        var list = sources(t)
+        let j = idx + delta
+        guard list.indices.contains(idx), list.indices.contains(j) else { return }
+        list.swapAt(idx, j)
+        pick[t] = list
     }
 
     /// 값 모양이 닮은 짝만 미리 골라 둔다. 한 컬럼을 여러 칸에 동시에 넣는 일은 없게
@@ -962,7 +1055,7 @@ struct FillFromSheet: View {
             guard let best = list.first(where: {
                 selected.contains($0.column) && ($0.percent ?? 0) > 0 && !used.contains($0.column)
             }) else { continue }
-            pick[t] = best.column
+            pick[t] = [best.column]
             used.insert(best.column)
         }
     }

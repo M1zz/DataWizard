@@ -826,7 +826,11 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("완성본 미리보기에서 채울 컬럼을 고르세요")
                     .font(.system(.title2, design: .rounded).weight(.bold))
-                Text("표에서 **파란 열**이 아직 빈 행이 있는 칸입니다. 머리글을 누르면 그 컬럼을 채웁니다.")
+                Text("표에서 파란 열이 아직 빈 행이 있는 칸입니다. 머리글을 누르면 그 컬럼을 채웁니다.")
+                    .font(.body).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("성·이름처럼 둘로 나뉜 컬럼은 틀 안의 칸과 함께 체크한 뒤 "
+                     + "‘이 칸들 채우기’를 누르면 한 칸으로 붙습니다 — 국문 성 + 국문 이름 → 김 철수.")
                     .font(.body).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -1416,12 +1420,12 @@ struct ContentView: View {
                 selectedOutside: outside,
                 candidates: Dictionary(uniqueKeysWithValues:
                     targets.map { ($0, fillFromCandidates(for: $0, preferring: outside)) }),
-                onApply: { pairs in
+                onApply: { plan in
                     fillFromSelection = []
-                    guard !pairs.isEmpty else { return }
-                    focusColumns = Set(pairs.map(\.target))
-                    withBusy("\(pairs.count)개 칸을 채우는 중…") {
-                        applyColumnFills(pairs)
+                    guard !plan.isEmpty else { return }
+                    focusColumns = Set(plan.map(\.target))
+                    withBusy("\(plan.count)개 칸을 채우는 중…") {
+                        applyColumnFills(plan)
                     }
                 },
                 onGenerate: { col in
@@ -1478,9 +1482,11 @@ struct ContentView: View {
     }
 
     /// 여러 칸을 한 번에 채운다 — 계획만 고쳐 두고 **다시 만드는 건 마지막에 한 번**.
-    private func applyColumnFills(_ pairs: [(target: UnifiedColumn, source: UnifiedColumn)]) {
-        for pair in pairs {
-            mutatePlans(target: pair.target, order: [pair.source], separator: " ")
+    private func applyColumnFills(_ plan: [(target: UnifiedColumn,
+                                           sources: [UnifiedColumn],
+                                           separator: String)]) {
+        for item in plan {
+            mutatePlans(target: item.target, order: item.sources, separator: item.separator)
         }
         rebuildWorkColumns()
         verifyRowCount("칸을 채운")
