@@ -327,18 +327,12 @@ struct ContentView: View {
                     Divider()
                     workFileStrip
                     Divider()
-                    verificationBar
-                    Divider()
-                    workColumnBar
-                    Divider()
+                    // 이 창은 **길잡이**다 — 얼마나 됐는지 보여 주고, 실제 작업은
+                    // 완성본 미리보기(작업대)에서 하도록 안내만 한다.
                     ScrollView {
-                        VStack(alignment: .leading, spacing: 10) {
-                            workMergeCard
-                            templateFillCard
-                            workPreviewCard
-                            workProposalCard
-                            workTodoSummary
-                            workColumnBoard
+                        VStack(alignment: .leading, spacing: 12) {
+                            workProgressCard
+                            workVerifyCard
                         }
                         .padding(24)
                     }
@@ -812,6 +806,110 @@ struct ContentView: View {
 
     /// 값을 정리해야 하는 컬럼들 — 미정리 값이 남았거나 파일마다 모양이 다른 컬럼.
     private var columnsNeedingClean: [(column: UnifiedColumn, note: String)] { cache.needClean }
+
+    /// 이 창의 전부 — “얼마나 됐고, 어디서 이어서 하면 되는지”.
+    /// 키 고르기·빈칸 채우기 같은 실제 작업은 전부 작업대(완성본 미리보기)에서 한다.
+    @ViewBuilder
+    private var workProgressCard: some View {
+        let holeCells = cache.templateCells - cache.templateFilled
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("완성본 미리보기에서 채울 컬럼을 고르세요")
+                    .font(.system(.title2, design: .rounded).weight(.bold))
+                Text("표에서 **파란 열**이 아직 빈 행이 있는 칸입니다. 머리글을 누르면 그 컬럼을 채웁니다.")
+                    .font(.body).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Button { openPreviewWindow() } label: {
+                Label("완성본 미리보기 열기", systemImage: "macwindow.badge.plus")
+                    .fontWeight(.semibold)
+            }
+            .controlSize(.large)
+            .buttonStyle(.borderedProminent)
+
+            if cache.templateCells > 0 { templateProgressBar }
+            Divider()
+            HStack(alignment: .top, spacing: 28) {
+                if cache.templateCells > 0 {
+                    progressStat("더 채워야 할 칸", holeCells.formatted(),
+                                 "틀 안 \(cache.holes.count)개 컬럼에 남아 있어요", .accentColor)
+                }
+                if !cache.needClean.isEmpty {
+                    progressStat("값을 정리할 컬럼", "\(cache.needClean.count)개",
+                                 "오타·형식이 어긋난 값이 남았어요", .orange)
+                }
+                if let dup = base?.duplicateRows.count, dup > 0 {
+                    progressStat("중복으로 보이는 행", "\(dup)행",
+                                 "표시만 해 뒀어요 — 지울지는 직접", .orange)
+                }
+                if cache.templateCells > 0 && cache.holes.isEmpty && cache.needClean.isEmpty {
+                    progressStat("남은 일", "없음", "이제 가져가면 돼요", .green)
+                }
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
+            .fill(Color.accentColor.opacity(0.06)))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+            .strokeBorder(Color.accentColor.opacity(0.22), lineWidth: 1))
+    }
+
+    /// 틀이 얼마나 찼는지 막대 하나로 — 이 도구의 진행도는 이것 하나면 된다.
+    private var templateProgressBar: some View {
+        let pct = Double(cache.templateFilled) / Double(max(cache.templateCells, 1))
+        return VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("틀 안 채움").font(.body.weight(.semibold))
+                Text("\(Int(pct * 100))%").font(.body.monospacedDigit().weight(.bold))
+                    .foregroundStyle(Color.accentColor)
+                Spacer()
+                Text("\(cache.templateFilled) / \(cache.templateCells)칸")
+                    .font(.body.monospacedDigit()).foregroundStyle(.secondary)
+            }
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.primary.opacity(0.08))
+                    Capsule().fill(Color.accentColor.opacity(0.75))
+                        .frame(width: max(2, geo.size.width * pct))
+                }
+            }
+            .frame(height: 8)
+        }
+    }
+
+    private func progressStat(_ title: String, _ value: String,
+                              _ note: String, _ tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.body).foregroundStyle(.secondary)
+            Text(value).font(.system(.title, design: .rounded).weight(.bold))
+                .foregroundStyle(tint).monospacedDigit()
+            Text(note).font(.body).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: 240, alignment: .leading)
+    }
+
+    /// 숫자가 맞는지 확인하는 칸 — 행이 빠지거나 늘지 않았는지만 본다.
+    @ViewBuilder
+    private var workVerifyCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("데이터 정합성").font(.headline)
+            rowCountTable
+            if let key = keyColumn {
+                Text("같은 행인지 가리는 키: ‘\(key.rawValue)’"
+                     + ((base?.generatedKeys ?? 0) > 0
+                        ? " · 키가 비어 있던 \(base!.generatedKeys)행엔 번호를 만들어 넣었어요" : ""))
+                    .font(.body).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .fill(Color.primary.opacity(0.03)))
+    }
 
     /// 지금 무엇이 남았는지 한 카드로 — 채울 것 / 정리할 것 / 이미 끝난 것.
     @ViewBuilder
@@ -8158,13 +8256,15 @@ struct PreviewWindowView: View {
         HStack(spacing: 10) {
             Label("완성본 미리보기", systemImage: "eye")
                 .font(.headline)
+                .lineLimit(1).fixedSize()
             if model.rows.isEmpty {
                 Text("파일을 올리고 ‘완성본 미리보기’를 누르면 채워집니다.")
                     .font(.body).foregroundStyle(.secondary)
+                    .lineLimit(1)
             } else {
                 summaryChips
             }
-            Spacer()
+            Spacer(minLength: 8)
             selectionActions
             if !model.rows.isEmpty { viewOptions }
         }
@@ -8244,58 +8344,64 @@ struct PreviewWindowView: View {
 
     @ViewBuilder
     private var viewOptions: some View {
-        Toggle(isOn: $showColors) { Text("색 표시") }
-            .toggleStyle(.checkbox)
-            .fixedSize()
-            .help("파일 색·컬럼 상태 색을 켜고 끕니다.")
-        Toggle(isOn: $improvedOnly) { Text("개선된 행만") }
-            .toggleStyle(.checkbox)
-            .fixedSize()
-            .help("정리로 값이 바뀐 행만 봅니다.")
-        Toggle(isOn: $unconfirmedOnly) { Text("확정 안 한 행만") }
-            .toggleStyle(.checkbox)
-            .fixedSize()
-            .help("아직 확정 표시를 안 한 행만 봅니다.")
-        if model.usingTemplate, !model.holeCounts.isEmpty {
-            Toggle(isOn: Binding(get: { holesOnly },
-                                 set: { holesOnly = $0; if $0 { extrasOnly = false } })) {
-                Text("채울 칸만 (\(model.holeCounts.count))")
+        // 체크박스를 한 줄에 늘어놓으면 창이 좁아질 때 글자가 세로로 접히거나
+        // ‘…’로 잘린다. 보기 옵션은 메뉴 하나로 접어 둔다.
+        Menu {
+            Toggle("색 표시", isOn: $showColors)
+            Divider()
+            if model.usingTemplate, !model.holeCounts.isEmpty {
+                Toggle("채울 칸만 보기 (\(model.holeCounts.count)컬럼)",
+                       isOn: Binding(get: { holesOnly },
+                                     set: { holesOnly = $0; if $0 { extrasOnly = false } }))
             }
-                .toggleStyle(.checkbox)
-                .fixedSize()
-                .help("틀 안인데 아직 빈 행이 남은 컬럼만 봅니다 — 이걸 채우는 게 목표예요.")
-        }
-        if model.usingTemplate, !model.extraColumns.isEmpty {
-            Toggle(isOn: Binding(get: { extrasOnly },
-                                 set: { extrasOnly = $0; if $0 { holesOnly = false } })) {
-                Text("틀 밖 재료만 (\(model.extraColumns.count))")
+            if model.usingTemplate, !model.extraColumns.isEmpty {
+                Toggle("틀 밖 재료만 보기 (\(model.extraColumns.count)컬럼)",
+                       isOn: Binding(get: { extrasOnly },
+                                     set: { extrasOnly = $0; if $0 { holesOnly = false } }))
             }
-                .toggleStyle(.checkbox)
-                .fixedSize()
-                .help("틀에 없는 컬럼만 봅니다 — 틀 안의 칸을 채울 때 쓰는 재료입니다.")
-        }
-        if !model.duplicateRows.isEmpty {
-            Toggle(isOn: Binding(get: { model.showDuplicatesOnly },
-                                 set: { model.showDuplicatesOnly = $0 })) {
-                Text("중복만 (\(model.duplicateRows.count))")
+            Divider()
+            Toggle("개선된 행만", isOn: $improvedOnly)
+            Toggle("확정 안 한 행만", isOn: $unconfirmedOnly)
+            if !model.duplicateRows.isEmpty {
+                Toggle("중복만 (\(model.duplicateRows.count)행)",
+                       isOn: Binding(get: { model.showDuplicatesOnly },
+                                     set: { model.showDuplicatesOnly = $0 }))
             }
-            .toggleStyle(.checkbox)
-            .fixedSize()
-            .help("앞줄에 같은 사람이 이미 있는 행만 봅니다. 지울지는 직접 정하세요.")
+            if filtersOn {
+                Divider()
+                Button("보기 조건 모두 끄기") {
+                    holesOnly = false; extrasOnly = false
+                    improvedOnly = false; unconfirmedOnly = false
+                    model.showDuplicatesOnly = false
+                }
+            }
+        } label: {
+            Label(filtersOn ? "보기 ●" : "보기", systemImage: "line.3.horizontal.decrease.circle")
         }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("무엇을 보여 줄지 고릅니다 — 채울 칸만, 틀 밖 재료만, 중복만…")
         if !model.changes.isEmpty {
             Button { showChanges = true } label: {
-                Label("변경 내역 \(model.changes.count)", systemImage: "arrow.left.arrow.right")
+                Label("변경 \(model.changes.count)", systemImage: "arrow.left.arrow.right")
             }
+            .fixedSize()
             .help("값 정리가 바꾼 칸을 이전 값 → 새 값으로 모아 봅니다.")
         }
         Button { copyTable() } label: {
             Label("표 복사", systemImage: "doc.on.doc")
         }
+        .fixedSize()
         .help("지금 보이는 표를 탭 구분으로 복사합니다 — 엑셀·구글 시트에 그대로 붙습니다.")
         TextField("값 검색…", text: $query)
             .textFieldStyle(.roundedBorder)
-            .frame(width: 180)
+            .frame(width: 150)
+            .fixedSize()
+    }
+
+    /// 지금 표를 좁혀 보고 있는가 (메뉴 버튼에 점을 찍어 알려 준다).
+    private var filtersOn: Bool {
+        holesOnly || extrasOnly || improvedOnly || unconfirmedOnly || model.showDuplicatesOnly
     }
 
     var body: some View {
@@ -8310,8 +8416,10 @@ struct PreviewWindowView: View {
                         .lineLimit(1).truncationMode(.tail)
                     Spacer(minLength: 8)
                     if let c = model.nextColumn {
-                        Button("‘\(c.rawValue)’ 채우기…") { model.request = .fill(c) }
+                        Button("이 컬럼 채우기…") { model.request = .fill(c) }
                             .controlSize(.small)
+                            .fixedSize()
+                            .help("‘\(c.rawValue)’에 넣을 값을 고릅니다.")
                     }
                 }
                 .padding(.horizontal, 16).padding(.vertical, 6)
@@ -8597,8 +8705,8 @@ struct PreviewWindowView: View {
                     .lineLimit(1).truncationMode(.tail)
                     .padding(.leading, 20)
             } else if model.usingTemplate, model.templateSet.contains(c) {
-                Text("틀 안 · 다 찼어요")
-                    .font(.body).foregroundStyle(.green)
+                Label("틀 안 · 다 참", systemImage: "checkmark")
+                    .font(.body).foregroundStyle(.secondary)
                     .lineLimit(1).truncationMode(.tail)
                     .padding(.leading, 20)
             }
@@ -8656,6 +8764,16 @@ struct PreviewWindowView: View {
         }
     }
 
+    /// 줄 머리(확정·행 번호·출처)의 너비 — 머리글과 본문이 같은 값을 써야 칸이 맞는다.
+    private var gutterWidth: CGFloat { (model.rowFiles.isEmpty ? 82 : 215) + 16 }
+
+    /// 표 한 줄의 전체 너비. 줄마다 `LazyHStack`이 제 나름대로 너비를 재면,
+    /// 가로로 스크롤하던 중에 만들어진 줄은 다른 줄과 몇 px씩 어긋나 그려진다
+    /// (24행·28행만 오른쪽으로 밀려 보이던 게 이것). 모든 줄에 같은 너비를 못 박는다.
+    private var tableWidth: CGFloat {
+        gutterWidth + shownColumns.reduce(0) { $0 + width($1) + 16 }
+    }
+
     private func tableRow(_ i: Int, _ row: ApplicantRow) -> some View {
         let confirmed: Color = model.isConfirmed(i) ? Color.green.opacity(0.10) : Color.clear
         let file: Color = showColors ? (model.fileTint(row: i)?.opacity(0.14) ?? .clear) : .clear
@@ -8666,7 +8784,7 @@ struct PreviewWindowView: View {
                     bodyCell(c, row: row, at: i)
                 }
             }
-            .frame(height: 26)
+            .frame(width: tableWidth, height: 26, alignment: .leading)
             .background(confirmed)
             .background(file)
             Divider()
@@ -8674,18 +8792,17 @@ struct PreviewWindowView: View {
     }
 
     private var tableHeader: some View {
-        let gutter: CGFloat = model.rowFiles.isEmpty ? 82 : 215
         let title: String = model.rowFiles.isEmpty ? "확정 · 행" : "확정 · 행 · 어느 파일에서"
         return LazyHStack(spacing: 0) {
             Text(title)
                 .font(.body.weight(.semibold)).foregroundStyle(.secondary)
-                .frame(width: gutter, alignment: .leading)
+                .frame(width: gutterWidth - 16, alignment: .leading)
                 .padding(.horizontal, 8).padding(.vertical, 6)
             ForEach(shownColumns, id: \.self) { c in
                 headerCell(c).id("col:" + c.rawValue)
             }
         }
-        .frame(height: 48)
+        .frame(width: tableWidth, height: 48, alignment: .leading)
         // 머리글은 스크롤 위에 떠 있다 — 불투명한 바닥을 먼저 깔아야 아래 행이 비쳐 보이지 않는다.
         .background(Color(nsColor: .underPageBackgroundColor))
         .background(Color(nsColor: .textBackgroundColor))
@@ -8791,6 +8908,7 @@ struct PreviewWindowView: View {
 
     /// 색이 뭘 뜻하는지 한 줄로 — 미리보기를 따로 띄워 보는 창이라 범례가 필요하다.
     private var legendBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
         VStack(alignment: .leading, spacing: 4) {
         if !model.fileNames.isEmpty && !model.rowFiles.isEmpty {
             HStack(spacing: 12) {
@@ -8842,6 +8960,7 @@ struct PreviewWindowView: View {
         }
         }
         .padding(.horizontal, 16).padding(.vertical, 6)
+        }
         .background(Color(nsColor: .underPageBackgroundColor))
     }
 
@@ -8850,14 +8969,18 @@ struct PreviewWindowView: View {
             RoundedRectangle(cornerRadius: 2).fill(tint.opacity(0.35))
                 .frame(width: 10, height: 10)
             Text(label).font(.body).foregroundStyle(.secondary)
+                .lineLimit(1)
         }
+        .fixedSize()
     }
 
     private func legendItem(_ icon: String, _ tint: Color, _ label: String) -> some View {
         HStack(spacing: 4) {
             Image(systemName: icon).font(.body).foregroundStyle(tint)
             Text(label).font(.body).foregroundStyle(.secondary)
+                .lineLimit(1)
         }
+        .fixedSize()
     }
 }
 
