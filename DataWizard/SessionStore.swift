@@ -60,6 +60,9 @@ struct SessionSnapshot: Codable {
         var separators: [String: String]
         /// 유틸 모드(파일 하나 그대로 고치기)로 만든 계획인가. 옵셔널 — 이전 세션도 열린다.
         var passthrough: Bool?
+        /// 시트에서 숨겨져 있어 안 읽은 행 수 — 되살릴 때도 그대로 알려 줘야 한다.
+        var hiddenRowsSkipped: Int?
+        var includesHiddenRows: Bool?
     }
 
     /// 기존 통합본을 값까지 통째로 저장 — 원본 파일에 다시 접근하지 않아도

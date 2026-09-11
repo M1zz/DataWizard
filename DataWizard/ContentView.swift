@@ -2654,6 +2654,12 @@ struct ContentView: View {
         VStack(spacing: 22) {
             Spacer(minLength: 0)
 
+            // 저장해 둔 작업이 있으면 **가장 먼저** 보여 준다 — 아래에 있으면 못 보고
+            // 파일부터 다시 올리게 되고, 그게 ‘매번 초기화되는’ 것처럼 보였다.
+            if let resumable {
+                resumeCard(resumable).frame(maxWidth: 600).padding(.horizontal, 40)
+            }
+
             workBaseInvite
                 .frame(maxWidth: 600)
                 .padding(.horizontal, 40)
@@ -2690,9 +2696,6 @@ struct ContentView: View {
 
             if let errorMessage { errorLabel(errorMessage).frame(maxWidth: 520) }
 
-            if let resumable {
-                resumeCard(resumable).frame(maxWidth: 560)
-            }
 
             // 애플 아카데미 전용 흐름 — 채널 판별·중복 제거·Unique ID까지 자동으로.
             Button {
@@ -5741,7 +5744,9 @@ struct ContentView: View {
                 rows: p.rows,
                 sources: Dictionary(uniqueKeysWithValues: p.sources.map { ($0.key.rawValue, $0.value) }),
                 separators: Dictionary(uniqueKeysWithValues: p.separators.map { ($0.key.rawValue, $0.value) }),
-                passthrough: p.passthrough)
+                passthrough: p.passthrough,
+                hiddenRowsSkipped: p.hiddenRowsSkipped,
+                includesHiddenRows: p.includesHiddenRows)
         }
         let stageStr: String
         switch stage {
@@ -5832,6 +5837,8 @@ struct ContentView: View {
                             channel: Channel(rawValue: f.channel) ?? .simple,
                             headers: f.headers, rows: f.rows,
                             sources: sources, separators: seps,
+                            hiddenRowsSkipped: f.hiddenRowsSkipped ?? 0,
+                            includesHiddenRows: f.includesHiddenRows ?? false,
                             passthrough: f.passthrough ?? false)
         }
         plans = restored
@@ -5872,11 +5879,8 @@ struct ContentView: View {
         }
         focusColumns = Set((s.focusColumns ?? []).compactMap(col))
         baseIsUserFile = (s.baseIsUserFile ?? false) && base != nil
-        // 사용자가 고른 틀이 아니면 기준선은 올린 파일들로 다시 만든다.
-        // (이전 버전 세션에는 행 출처가 없어서 미리보기 파일 색이 안 나왔다.)
-        if !baseIsUserFile, !plans.isEmpty {
-            base = BaseSheet.stacked(plans, name: stackedName(plans))
-        }
+        // 결과물을 다시 만드는 건 아래에서 rebuildWorkColumns()가 한 번에 한다 —
+        // 틀 컬럼 순서·키 컬럼·번호 패턴·지운 행까지 전부 반영해서.
         matchColumn = s.matchColumn.flatMap(col)
         templateName = s.templateName
         templateColumns = (s.templateColumns ?? []).compactMap(col)
@@ -5892,11 +5896,18 @@ struct ContentView: View {
                 guard let c = col(kv.key), let v = GeneratedValue(encoded: kv.value) else { return nil }
                 return (c, v)
             })
-        indexBase()
-        refreshMatches()
+        // 여기까지가 ‘저장해 둔 결정’ 복원. 이제 그 결정대로 **결과물을 다시 만든다**.
+        // (이게 빠져 있어서 되살리면 진행도·틀 채움·만든 번호가 0으로 보였다.)
+        if !baseIsUserFile, !plans.isEmpty {
+            let keep = includedColumns
+            rebuildWorkColumns()
+            includedColumns = keep
+        } else {
+            indexBase()
+            refreshMatches()
+        }
         patch = nil
         resumable = nil
-        preview.reset()
         errorMessage = nil
 
         // 복원 시에는 이미 갈림길을 지난 상태이므로 갈림길 화면을 다시 띄우지 않는다.
