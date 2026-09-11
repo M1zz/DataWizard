@@ -1261,16 +1261,26 @@ struct ContentView: View {
                 plans[i].headers.append(target.rawValue)
             }
             for col in order where col != target {
+                // 파일의 **진짜 헤더 이름**으로 지워야 한다. 컬럼 이름은 앞뒤 공백을 떼어
+                // 쓰는데(`대학교 재학/휴학/졸업 예정`), 파일 헤더엔 공백이 붙어 있을 수 있어
+                // (`… 예정 `) 이름만으로 지우면 껍데기 컬럼이 목록에 남았다.
+                // 그 껍데기는 값이 하나도 없어서, 거기에 해 둔 값 정리는 아무 일도 안 한다.
+                let raw = plans[i].sources[col] ?? [col.rawValue]
                 plans[i].sources[col] = nil
                 plans[i].separators[col] = nil
                 plans[i].combine[col] = nil
-                plans[i].headers.removeAll { $0 == col.rawValue }
+                plans[i].headers.removeAll { raw.contains($0) || $0 == col.rawValue }
             }
         }
         // 이미 해 둔 값 정리도 새 칸으로 옮겨 둔다.
         for col in order where col != target {
             if let m = valueMap.removeValue(forKey: col) {
                 valueMap[target] = (valueMap[target] ?? [:]).merging(m) { a, _ in a }
+            }
+            // 허용 목록(매핑표로 정한 값들)도 같이 옮긴다 — 안 옮기면 옮긴 칸이
+            // 그 목록을 잃고 ‘정리할 값’이 다시 살아난다.
+            if let a = allowedValues.removeValue(forKey: col), allowedValues[target] == nil {
+                allowedValues[target] = a
             }
             typeOverride[col] = nil
             formatChoice[col] = nil
@@ -5176,8 +5186,40 @@ struct ContentView: View {
         }
     }
 
+    /// 어느 칸에서도 쓰이지 않고 제 이름으로도 매핑돼 있지 않은 헤더를 치운다.
+    /// 컬럼을 옮길 때 **파일 헤더의 앞뒤 공백** 때문에 지워지지 않고 남던 껍데기다 —
+    /// 값이 하나도 없어서, 거기에 값 정리를 해 봐야 아무 일도 일어나지 않는다.
+    /// 그 껍데기에 해 둔 정리 규칙은 지금 그 값을 들고 있는 칸으로 옮겨 준다.
+    private func pruneGhostHeaders() {
+        for i in plans.indices {
+            var used: [String: UnifiedColumn] = [:]      // 원본 헤더 → 그걸 쓰는 칸
+            for (col, srcs) in plans[i].sources {
+                for h in srcs where used[h] == nil { used[h] = col }
+            }
+            // 껍데기 = 목록엔 있는데 **제 이름으로는 아무 값도 읽지 않는** 헤더.
+            // (그 값을 다른 칸이 가져갔더라도, 이 이름의 컬럼 자체는 빈 껍데기다.)
+            let ghosts = plans[i].headers.filter { h in
+                guard let col = UnifiedColumn(rawValue: h) else { return true }
+                return plans[i].sources[col] == nil
+            }
+            guard !ghosts.isEmpty else { continue }
+            for h in ghosts {
+                if let col = UnifiedColumn(rawValue: h),
+                   let rules = valueMap.removeValue(forKey: col), !rules.isEmpty,
+                   let owner = used[h] {          // 지금 그 값을 들고 있는 칸
+                    valueMap[owner] = (valueMap[owner] ?? [:]).merging(rules) { _, new in new }
+                    if let a = allowedValues.removeValue(forKey: col), allowedValues[owner] == nil {
+                        allowedValues[owner] = a
+                    }
+                }
+            }
+            plans[i].headers.removeAll { ghosts.contains($0) }
+        }
+    }
+
     /// 틀의 컬럼 순서를 반영해 컬럼 목록과 기준선을 다시 만든다.
     private func rebuildWorkColumns() {
+        pruneGhostHeaders()
         guard !plans.isEmpty else {
             base = nil
             finalColumns = []
