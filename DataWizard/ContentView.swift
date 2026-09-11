@@ -1165,11 +1165,13 @@ struct ContentView: View {
                     }
                     return []
                 },
-                onApply: { target, order, separator in
+                onApply: { target, order, separator, mode, thenClean in
                     confirmMerge = nil
                     focusColumns = [target]
                     withBusy("칸을 합치는 중…") {
-                        applyColumnMerge(target: target, order: order, separator: separator)
+                        applyColumnMerge(target: target, order: order,
+                                         separator: separator, mode: mode)
+                        if thenClean { startWork() }
                     }
                 },
                 onClose: { confirmMerge = nil })
@@ -1180,8 +1182,9 @@ struct ContentView: View {
     /// (행은 건드리지 않는다. 어느 칸의 값을 어떻게 읽을지만 바꾼다.)
     private func applyColumnMerge(target: UnifiedColumn,
                                   order: [UnifiedColumn],
-                                  separator: String) {
-        mutatePlans(target: target, order: order, separator: separator)
+                                  separator: String,
+                                  mode: CombineMode = .join) {
+        mutatePlans(target: target, order: order, separator: separator, mode: mode)
         rebuildWorkColumns()
         scheduleSave()
     }
@@ -1190,7 +1193,8 @@ struct ContentView: View {
     /// 여러 칸을 연달아 채울 때 이걸 여러 번 부르고 마지막에 한 번만 다시 만든다.
     private func mutatePlans(target: UnifiedColumn,
                              order: [UnifiedColumn],
-                             separator: String) {
+                             separator: String,
+                             mode: CombineMode = .join) {
         for i in plans.indices {
             var sources: [String] = []
             for col in order {
@@ -1199,12 +1203,14 @@ struct ContentView: View {
             guard !sources.isEmpty else { continue }
             plans[i].sources[target] = sources
             plans[i].separators[target] = separator
+            plans[i].combine[target] = mode
             if !plans[i].headers.contains(target.rawValue) {
                 plans[i].headers.append(target.rawValue)
             }
             for col in order where col != target {
                 plans[i].sources[col] = nil
                 plans[i].separators[col] = nil
+                plans[i].combine[col] = nil
                 plans[i].headers.removeAll { $0 == col.rawValue }
             }
         }
@@ -1441,12 +1447,14 @@ struct ContentView: View {
                 selectedOutside: outside,
                 candidates: Dictionary(uniqueKeysWithValues:
                     targets.map { ($0, fillFromCandidates(for: $0, preferring: outside)) }),
-                onApply: { plan in
+                onApply: { plan, thenClean in
                     fillFromSelection = []
                     guard !plan.isEmpty else { return }
                     focusColumns = Set(plan.map(\.target))
                     withBusy("\(plan.count)개 칸을 채우는 중…") {
                         applyColumnFills(plan)
+                        // ‘채우고 값도 통일’을 골랐으면 그대로 정리 화면까지 데려간다.
+                        if thenClean { startWork() }
                     }
                 },
                 onGenerate: { col in
@@ -1505,9 +1513,11 @@ struct ContentView: View {
     /// 여러 칸을 한 번에 채운다 — 계획만 고쳐 두고 **다시 만드는 건 마지막에 한 번**.
     private func applyColumnFills(_ plan: [(target: UnifiedColumn,
                                            sources: [UnifiedColumn],
-                                           separator: String)]) {
+                                           separator: String,
+                                           mode: CombineMode)]) {
         for item in plan {
-            mutatePlans(target: item.target, order: item.sources, separator: item.separator)
+            mutatePlans(target: item.target, order: item.sources,
+                        separator: item.separator, mode: item.mode)
         }
         rebuildWorkColumns()
         verifyRowCount("칸을 채운")
@@ -5761,7 +5771,9 @@ struct ContentView: View {
                 separators: Dictionary(uniqueKeysWithValues: p.separators.map { ($0.key.rawValue, $0.value) }),
                 passthrough: p.passthrough,
                 hiddenRowsSkipped: p.hiddenRowsSkipped,
-                includesHiddenRows: p.includesHiddenRows)
+                includesHiddenRows: p.includesHiddenRows,
+                combine: Dictionary(uniqueKeysWithValues:
+                    p.combine.map { ($0.key.rawValue, $0.value.rawValue) }))
         }
         let stageStr: String
         switch stage {
@@ -5848,10 +5860,14 @@ struct ContentView: View {
             for (k, v) in f.sources { if let c = col(k) { sources[c] = v } }
             var seps: [UnifiedColumn: String] = [:]
             for (k, v) in f.separators { if let c = col(k) { seps[c] = v } }
+            var how: [UnifiedColumn: CombineMode] = [:]
+            for (k, v) in (f.combine ?? [:]) {
+                if let c = col(k), let m = CombineMode(rawValue: v) { how[c] = m }
+            }
             return FilePlan(url: URL(fileURLWithPath: f.path),
                             channel: Channel(rawValue: f.channel) ?? .simple,
                             headers: f.headers, rows: f.rows,
-                            sources: sources, separators: seps,
+                            sources: sources, separators: seps, combine: how,
                             hiddenRowsSkipped: f.hiddenRowsSkipped ?? 0,
                             includesHiddenRows: f.includesHiddenRows ?? false,
                             passthrough: f.passthrough ?? false)
@@ -8594,11 +8610,43 @@ struct PreviewWindowView: View {
             .fixedSize()
             .help("값 정리가 바꾼 칸을 이전 값 → 새 값으로 모아 봅니다.")
         }
-        Button { copyTable() } label: {
-            Label("표 복사", systemImage: "doc.on.doc")
+        Menu {
+            let picked = shownColumns.filter { model.selection.contains($0) }
+            if !picked.isEmpty {
+                Button("고른 컬럼만 복사 (\(picked.count)개)") {
+                    copyTable(columns: picked, withOrigin: false)
+                }
+                Button("고른 컬럼 이름만 복사") {
+                    copyToClipboard(picked.map(\.rawValue).joined(separator: "\t"))
+                }
+                Divider()
+            }
+            Button("보이는 표 전체 복사") { copyTable(columns: shownColumns, withOrigin: true) }
+            Button("보이는 표 (행·출처 빼고)") {
+                copyTable(columns: shownColumns, withOrigin: false)
+            }
+        } label: {
+            Label("복사", systemImage: "doc.on.doc")
         }
+        .menuStyle(.borderlessButton)
         .fixedSize()
-        .help("지금 보이는 표를 탭 구분으로 복사합니다 — 엑셀·구글 시트에 그대로 붙습니다.")
+        .help("표를 탭 구분으로 복사합니다 — 엑셀·구글 시트에 그대로 붙습니다. "
+              + "머리글 네모를 체크해 두면 그 컬럼만 복사할 수 있어요.")
+
+        Menu {
+            let picked = shownColumns.filter { model.selection.contains($0) }
+            Text(picked.isEmpty ? "보이는 컬럼 \(shownColumns.count)개 · \(visibleRows.count)행"
+                                : "고른 컬럼 \(picked.count)개 · \(visibleRows.count)행")
+            Divider()
+            Button("엑셀 파일(.xlsx)로 저장…") { exportTable(asXLSX: true) }
+            Button("CSV로 저장…") { exportTable(asXLSX: false) }
+        } label: {
+            Label("내보내기", systemImage: "square.and.arrow.down")
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("지금 보이는 표를 그대로 파일로 저장합니다. "
+              + "머리글을 골라 두면 고른 컬럼만, 보기를 좁혀 두면 그 행만 나갑니다.")
         TextField("값 검색…", text: $query)
             .textFieldStyle(.roundedBorder)
             .frame(width: 150)
@@ -8720,7 +8768,9 @@ struct PreviewWindowView: View {
         Button("‘\(c.rawValue)’ 열 전체 복사") {
             copyToClipboard(model.rows.map { $0[c] }.joined(separator: "\n"))
         }
-        Button("표 전체 복사 (붙여넣기용)") { copyTable() }
+        Button("표 전체 복사 (붙여넣기용)") {
+            copyTable(columns: shownColumns, withOrigin: true)
+        }
         Divider()
         Button("‘\(c.rawValue)’ 값 채우기…") { model.request = .fill(c) }
     }
@@ -8731,15 +8781,49 @@ struct PreviewWindowView: View {
     }
 
     /// 지금 보이는 표를 탭으로 구분해 복사 — 엑셀·시트에 그대로 붙습니다.
-    private func copyTable() {
+    /// 지금 내보낼 컬럼 — 머리글을 골라 뒀으면 **그것만**, 아니면 보이는 표 전체.
+    private var exportColumns: [UnifiedColumn] {
+        let picked = shownColumns.filter { model.selection.contains($0) }
+        return picked.isEmpty ? shownColumns : picked
+    }
+
+    /// 표를 탭 구분으로 복사. `withOrigin`이면 행 번호·출처 파일을 앞에 붙인다.
+    private func copyTable(columns: [UnifiedColumn], withOrigin: Bool) {
         var lines: [String] = []
-        let cols = shownColumns    // 화면에 보이는 순서 그대로 (틀 안 컬럼이 먼저)
-        lines.append((["행", "출처"] + cols.map(\.rawValue)).joined(separator: "\t"))
+        let head = (withOrigin ? ["행", "출처"] : []) + columns.map(\.rawValue)
+        lines.append(head.joined(separator: "\t"))
         for (i, row) in visibleRows {
-            let cells = cols.map { row[$0].replacingOccurrences(of: "\t", with: " ") }
-            lines.append((["\(i + 1)", model.fileLabel(row: i)] + cells).joined(separator: "\t"))
+            let cells = columns.map { row[$0].replacingOccurrences(of: "\t", with: " ") }
+            let lead = withOrigin ? ["\(i + 1)", model.fileLabel(row: i)] : []
+            lines.append((lead + cells).joined(separator: "\t"))
         }
         copyToClipboard(lines.joined(separator: "\n"))
+    }
+
+    /// 지금 보고 있는 표 그대로 파일로 저장한다 (골라 둔 컬럼이 있으면 그것만).
+    private func exportTable(asXLSX: Bool) {
+        let cols = exportColumns
+        let headers = cols.map(\.rawValue)
+        let rows = visibleRows.map { _, row in cols.map { row[$0] } }
+        let panel = NSSavePanel()
+        panel.title = "완성본 내보내기"
+        panel.nameFieldStringValue = asXLSX ? "완성본.xlsx" : "완성본.csv"
+        panel.allowedContentTypes = [asXLSX
+            ? (UTType(filenameExtension: "xlsx") ?? .data)
+            : .commaSeparatedText]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            if asXLSX {
+                try XLSXWriter.book(headers: headers, rows: rows).write(to: url)
+            } else {
+                // 엑셀이 한글을 깨지 않게 BOM을 붙인다.
+                let csv = "\u{FEFF}" + CSVParser.write(headers: headers, rows: rows)
+                try Data(csv.utf8).write(to: url)
+            }
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        } catch {
+            NSSound.beep()
+        }
     }
 
     /// 값 고치기 창 — 같은 값이 여러 행에 있으면 몇 행이 함께 바뀌는지 알려 준다.

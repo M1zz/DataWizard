@@ -63,6 +63,8 @@ struct SessionSnapshot: Codable {
         /// 시트에서 숨겨져 있어 안 읽은 행 수 — 되살릴 때도 그대로 알려 줘야 한다.
         var hiddenRowsSkipped: Int?
         var includesHiddenRows: Bool?
+        /// 컬럼마다 ‘어떻게 합칠지’ (`join` | `first`). 없으면 이어 붙이기.
+        var combine: [String: String]?
     }
 
     /// 기존 통합본을 값까지 통째로 저장 — 원본 파일에 다시 접근하지 않아도

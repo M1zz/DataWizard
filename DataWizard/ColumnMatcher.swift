@@ -366,18 +366,24 @@ struct ColumnMergeSetupSheet: View {
     let templateColumns: Set<UnifiedColumn>
     /// 컬럼의 실제 값 몇 개 (미리보기용).
     let sample: (UnifiedColumn) -> [String]
-    let onApply: (_ target: UnifiedColumn, _ order: [UnifiedColumn], _ separator: String) -> Void
+    let onApply: (_ target: UnifiedColumn, _ order: [UnifiedColumn],
+                  _ separator: String, _ mode: CombineMode, _ thenClean: Bool) -> Void
     let onClose: () -> Void
 
     @State private var target: UnifiedColumn
     @State private var order: [UnifiedColumn]
     @State private var separator: String
     @State private var custom = ""
+    /// 어떻게 합칠지 — 이어 붙이기 / 값이 있는 것 하나만.
+    @State private var mode: CombineMode = .join
+    /// 합친 뒤 값 정리 화면까지 갈지.
+    @State private var thenClean = false
 
     init(columns: [UnifiedColumn],
          templateColumns: Set<UnifiedColumn>,
          sample: @escaping (UnifiedColumn) -> [String],
-         onApply: @escaping (UnifiedColumn, [UnifiedColumn], String) -> Void,
+         onApply: @escaping (UnifiedColumn, [UnifiedColumn], String,
+                             CombineMode, Bool) -> Void,
          onClose: @escaping () -> Void) {
         self.columns = columns
         self.templateColumns = templateColumns
@@ -395,7 +401,7 @@ struct ColumnMergeSetupSheet: View {
     private var previewLine: String {
         let parts = order.compactMap { sample($0).first }.filter { !$0.isEmpty }
         guard !parts.isEmpty else { return "—" }
-        return parts.joined(separator: separator)
+        return mode == .first ? parts[0] : parts.joined(separator: separator)
     }
 
     var body: some View {
@@ -417,7 +423,20 @@ struct ColumnMergeSetupSheet: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("어떤 순서로 이어 붙일까요?").font(.body.weight(.semibold))
+                Text("어떻게 합칠까요?").font(.body.weight(.semibold))
+                Picker("", selection: $mode) {
+                    Text("이어 붙이기 — 성 + 이름 → 김 철수").tag(CombineMode.join)
+                    Text("값이 있는 것 하나만 — 남성/여성 칸과 male/female 칸을 한 칸으로")
+                        .tag(CombineMode.first)
+                }
+                .labelsHidden()
+                .pickerStyle(.radioGroup)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(mode == .first ? "어느 것을 먼저 볼까요? (비어 있으면 다음 것)"
+                                    : "어떤 순서로 이어 붙일까요?")
+                    .font(.body.weight(.semibold))
                 ForEach(Array(order.enumerated()), id: \.element) { idx, c in
                     HStack(spacing: 8) {
                         Text("\(idx + 1).").font(.body.monospacedDigit()).foregroundStyle(.secondary)
@@ -443,19 +462,27 @@ struct ColumnMergeSetupSheet: View {
                 }
             }
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text("사이에 무엇을 넣을까요?").font(.body.weight(.semibold))
-                HStack(spacing: 8) {
-                    chip("붙여쓰기", "")
-                    chip("공백", " ")
-                    chip("쉼표", ", ")
-                    chip("하이픈", "-")
-                    TextField("직접", text: $custom)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 90)
-                        .onChange(of: custom) { v in if !v.isEmpty { separator = v } }
+            if mode == .join {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("사이에 무엇을 넣을까요?").font(.body.weight(.semibold))
+                    HStack(spacing: 8) {
+                        chip("붙여쓰기", "")
+                        chip("공백", " ")
+                        chip("쉼표", ", ")
+                        chip("하이픈", "-")
+                        TextField("직접", text: $custom)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 90)
+                            .onChange(of: custom) { v in if !v.isEmpty { separator = v } }
+                    }
                 }
             }
+
+            Toggle(isOn: $thenClean) {
+                Text("합친 뒤에 이어서 값도 하나로 통일하기 (male → 남성처럼)")
+            }
+            .toggleStyle(.checkbox)
+            .help("합치고 나면 그 컬럼의 값 정리 화면으로 바로 넘어갑니다.")
 
             HStack(spacing: 8) {
                 Text("이렇게 됩니다").font(.body.weight(.semibold))
@@ -469,7 +496,7 @@ struct ColumnMergeSetupSheet: View {
             HStack {
                 Spacer()
                 Button("취소") { onClose() }
-                Button("합치기") { onApply(target, order, separator) }
+                Button("합치기") { onApply(target, order, separator, mode, thenClean) }
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
             }
@@ -836,7 +863,9 @@ struct FillFromSheet: View {
     /// 대상마다 **여러 컬럼을 순서대로** 합쳐 넣을 수 있다 (성 + 이름 → 김 철수).
     let onApply: (_ plans: [(target: UnifiedColumn,
                              sources: [UnifiedColumn],
-                             separator: String)]) -> Void
+                             separator: String,
+                             mode: CombineMode)],
+                  _ thenClean: Bool) -> Void
     /// 가져올 컬럼이 없을 때 — 패턴(고정값·번호 매기기)을 만들어 자동으로 채운다.
     let onGenerate: (UnifiedColumn) -> Void
     /// 값을 가져오는 게 아니라, 이미 있는 값의 오타·표기만 손보러 갈 때.
@@ -847,15 +876,22 @@ struct FillFromSheet: View {
     @State private var pick: [UnifiedColumn: [UnifiedColumn]] = [:]
     /// 대상 → 사이에 넣을 글자 (둘 이상 골랐을 때만 쓴다).
     @State private var sep: [UnifiedColumn: String] = [:]
+    /// 대상 → 어떻게 넣을지 (이어 붙이기 / 값이 있는 첫 칸만).
+    @State private var how: [UnifiedColumn: CombineMode] = [:]
+    /// 채운 뒤 곧바로 값 정리 화면으로 갈지.
+    @State private var thenClean = false
     @State private var didSeed = false
 
     private func sources(_ t: UnifiedColumn) -> [UnifiedColumn] { pick[t] ?? [] }
     private func separator(_ t: UnifiedColumn) -> String { sep[t] ?? " " }
+    private func mode(_ t: UnifiedColumn) -> CombineMode { how[t] ?? .join }
 
-    private var chosen: [(target: UnifiedColumn, sources: [UnifiedColumn], separator: String)] {
+    private var chosen: [(target: UnifiedColumn, sources: [UnifiedColumn],
+                          separator: String, mode: CombineMode)] {
         targets.compactMap { t in
             let list = sources(t)
-            return list.isEmpty ? nil : (target: t, sources: list, separator: separator(t))
+            return list.isEmpty ? nil
+                : (target: t, sources: list, separator: separator(t), mode: mode(t))
         }
     }
 
@@ -885,6 +921,12 @@ struct FillFromSheet: View {
             }
             .frame(maxHeight: 400)
 
+            Toggle(isOn: $thenClean) {
+                Text("채운 뒤에 이어서 값도 하나로 통일하기 (male → 남성처럼)")
+            }
+            .toggleStyle(.checkbox)
+            .help("채우고 나면 그 컬럼의 값 정리 화면으로 바로 넘어갑니다.")
+
             HStack(spacing: 10) {
                 Button("이미 있는 값의 오타·표기 정리…") { onCleanOnly() }
                     .help("값을 새로 가져오지 않고, 고른 컬럼에 이미 들어 있는 값만 손봅니다 — "
@@ -892,7 +934,7 @@ struct FillFromSheet: View {
                 Spacer()
                 Button("닫기") { onClose() }
                 Button(chosen.isEmpty ? "가져오기" : "\(chosen.count)개 칸 채우기") {
-                    onApply(chosen)
+                    onApply(chosen, thenClean)
                 }
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
@@ -952,6 +994,20 @@ struct FillFromSheet: View {
             }
 
             if picked.count >= 2 {
+                // ① 어떻게 넣을지 — 이어 붙일지, 값이 있는 것 하나만 쓸지.
+                HStack(spacing: 8) {
+                    Text("어떻게").font(.body).foregroundStyle(.secondary)
+                    Picker("", selection: Binding(get: { mode(t) },
+                                                  set: { how[t] = $0 })) {
+                        Text("이어 붙이기 (성 + 이름 → 김 철수)").tag(CombineMode.join)
+                        Text("값이 있는 것 하나만 (남성/여성 · male/female)").tag(CombineMode.first)
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.radioGroup)
+                    Spacer(minLength: 0)
+                }
+                .padding(.leading, 228)
+
                 // 붙는 순서와 사이 글자 — 바로 아래에 결과 예시가 따라온다.
                 HStack(spacing: 6) {
                     ForEach(Array(picked.enumerated()), id: \.element) { idx, col in
@@ -969,11 +1025,16 @@ struct FillFromSheet: View {
                         .padding(.horizontal, 6).padding(.vertical, 2)
                         .background(Capsule().fill(Color.accentColor.opacity(0.12)))
                     }
-                    Text("사이에").font(.body).foregroundStyle(.secondary)
-                    sepChip(t, "붙여쓰기", "")
-                    sepChip(t, "공백", " ")
-                    sepChip(t, "쉼표", ", ")
-                    sepChip(t, "하이픈", "-")
+                    if mode(t) == .join {
+                        Text("사이에").font(.body).foregroundStyle(.secondary)
+                        sepChip(t, "붙여쓰기", "")
+                        sepChip(t, "공백", " ")
+                        sepChip(t, "쉼표", ", ")
+                        sepChip(t, "하이픈", "-")
+                    } else {
+                        Text("앞의 것부터 — 비어 있으면 다음 것을 씁니다")
+                            .font(.body).foregroundStyle(.secondary)
+                    }
                     Spacer(minLength: 0)
                 }
                 .padding(.leading, 228)
@@ -1017,7 +1078,8 @@ struct FillFromSheet: View {
         let parts = sources(t).compactMap { col in
             list.first { $0.column == col }?.samples.first
         }.filter { !$0.isEmpty }
-        return parts.isEmpty ? "—" : parts.joined(separator: separator(t))
+        if parts.isEmpty { return "—" }
+        return mode(t) == .first ? parts[0] : parts.joined(separator: separator(t))
     }
 
     private func sepChip(_ t: UnifiedColumn, _ title: String, _ value: String) -> some View {

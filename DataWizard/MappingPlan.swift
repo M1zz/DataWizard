@@ -6,6 +6,14 @@ import Foundation
 /// file's source columns (joined by an optional separator). One source column is
 /// the common case; two or more cover composites like 이름 = 성 + 이름, or an
 /// address assembled from several fields.
+/// 한 컬럼에 여러 칸을 넣을 때의 방식.
+enum CombineMode: String, Codable {
+    /// 순서대로 이어 붙인다 — 성 + 이름 → 김 철수.
+    case join
+    /// 값이 있는 첫 칸만 쓴다 — 남성/여성 칸과 male/female 칸을 한 칸으로.
+    case first
+}
+
 struct FilePlan: Identifiable {
     let id = UUID()
     var url: URL
@@ -14,6 +22,9 @@ struct FilePlan: Identifiable {
     var rows: [[String: String]]                // every parsed row, header-keyed
     var sources: [UnifiedColumn: [String]]      // unified field -> ordered source columns
     var separators: [UnifiedColumn: String]     // join string between combined sources ("")
+    /// 여러 칸을 한 컬럼에 넣을 때 **어떻게** 넣을지.
+    /// 없으면 지금까지처럼 이어 붙인다(`.join`).
+    var combine: [UnifiedColumn: CombineMode] = [:]
     /// 시트에 숨겨져 있어 빼 둔 줄 수 (엑셀·넘버스에서 필터로 감춘 줄).
     var hiddenRowsSkipped = 0
     /// 숨겨진 줄까지 읽어 들였는가.
@@ -68,7 +79,11 @@ struct FilePlan: Identifiable {
             let v = (row[c] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             return v.isEmpty ? nil : v
         }
-        let joined = parts.joined(separator: separators[col] ?? "")
+        // `.first` = 값이 있는 첫 칸만 쓴다. 같은 뜻을 다른 말로 적어 둔 두 칸
+        // (남성/여성 · male/female)을 한 칸으로 모을 때 이어 붙이면 안 되기 때문.
+        let joined = combine[col] == .first
+            ? (parts.first ?? "")
+            : parts.joined(separator: separators[col] ?? "")
 
         // 간편지원 국가: ‘그 외 국가’를 고르면 실제 국가명 컬럼의 값으로 치환해
         // 최종본처럼 진짜 국가명이 남도록 한다 (값 통일에서 영문으로 정리 가능).
