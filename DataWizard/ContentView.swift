@@ -8020,10 +8020,32 @@ enum ColumnWorkStatus {
 
 }
 
-/// 표가 가로로 얼마나 밀렸는지 알려 주는 전달 키.
-struct TableOffsetKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+/// 표가 가로로 얼마나 밀렸는지 알려 준다.
+/// SwiftUI의 preference로는 값이 올라오지 않아(늘 0이었다) 스크롤뷰에서 직접 읽는다.
+struct ScrollOffsetReader: NSViewRepresentable {
+    let onChange: (CGFloat) -> Void
+
+    final class Coordinator {
+        var token: NSObjectProtocol?
+        deinit { if let token { NotificationCenter.default.removeObserver(token) } }
+    }
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        // 붙는 순간엔 아직 스크롤뷰 안에 들어가기 전이라 다음 차례로 미룬다.
+        DispatchQueue.main.async {
+            guard let clip = view.enclosingScrollView?.contentView else { return }
+            clip.postsBoundsChangedNotifications = true
+            context.coordinator.token = NotificationCenter.default.addObserver(
+                forName: NSView.boundsDidChangeNotification, object: clip, queue: .main
+            ) { _ in onChange(clip.bounds.origin.x) }
+            onChange(clip.bounds.origin.x)
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
 /// Shared state for the standalone preview window. ContentView writes into it
@@ -8453,6 +8475,9 @@ struct PreviewWindowView: View {
     /// 이 둘로 ‘지금 그릴 컬럼 구간’을 **한 번만** 정해 모든 줄이 똑같이 쓴다.
     @State private var hOffset: CGFloat = 0
     @State private var viewportWidth: CGFloat = 900
+    /// 스크롤 위치를 실제로 읽을 수 있는가. 못 읽으면 **컬럼을 전부 그린다** —
+    /// 느려질지언정 컬럼이 안 보이는 일은 없어야 한다.
+    @State private var offsetKnown = false
     private static let defaultColumnWidth: CGFloat = 190
 
     private func width(_ c: UnifiedColumn) -> CGFloat {
@@ -9071,16 +9096,11 @@ struct PreviewWindowView: View {
                     }
                     // 가로로 얼마나 밀렸는지 — 모든 줄이 **같은 컬럼 구간**을 그리게 하려면
                     // 이 값이 필요하다 (줄마다 제 나름대로 재면 줄이 어긋난다).
-                    .background(GeometryReader { g in
-                        Color.clear.preference(
-                            key: TableOffsetKey.self,
-                            value: -g.frame(in: .named("previewTable")).minX)
-                    })
-                }
-                .coordinateSpace(name: "previewTable")
-                .onPreferenceChange(TableOffsetKey.self) { value in
-                    // 반 컬럼쯤 움직였을 때만 구간을 다시 잡는다 (매 픽셀 갱신은 낭비).
-                    if abs(value - hOffset) > 40 { hOffset = value }
+                    .background(ScrollOffsetReader { x in
+                        offsetKnown = true
+                        // 반 컬럼쯤 움직였을 때만 구간을 다시 잡는다 (매 픽셀 갱신은 낭비).
+                        if abs(x - hOffset) > 60 { hOffset = x }
+                    }.frame(width: 0, height: 0))
                 }
                 .onChange(of: jumpColumn) { name in
                     guard let name else { return }
@@ -9100,25 +9120,35 @@ struct PreviewWindowView: View {
     private var columnWindow: (range: Range<Int>, leading: CGFloat) {
         let cols = shownColumns
         guard !cols.isEmpty else { return (0..<0, 0) }
-        var starts: [CGFloat] = []
-        var x: CGFloat = 0
-        for c in cols { starts.append(x); x += width(c) + 16 }
-
+        // 스크롤 위치를 못 읽는 상황이면 좁히지 않는다 (안 보이는 컬럼이 생기는 것보다 낫다).
+        guard offsetKnown else { return (0..<cols.count, 0) }
         let from = max(0, hOffset - gutterWidth)
         let to = from + max(viewportWidth, 400)
-        var first = 0
-        while first < cols.count - 1 && starts[first] + width(cols[first]) + 16 < from { first += 1 }
-        var last = first
-        while last < cols.count - 1 && starts[last] < to { last += 1 }
 
-        first = max(0, first - 2)
-        last = min(cols.count - 1, last + 2)
+        // 배열을 만들지 않고 훑는다 — 줄마다 다시 계산되는 자리라 가벼워야 한다.
+        var first = 0, x: CGFloat = 0
+        while first < cols.count - 1, x + width(cols[first]) + 16 < from {
+            x += width(cols[first]) + 16
+            first += 1
+        }
+        var last = first, endX = x
+        while last < cols.count - 1, endX < to {
+            endX += width(cols[last]) + 16
+            last += 1
+        }
+
+        // 양옆으로 몇 칸 더 (스크롤 중 빈칸이 스치지 않게).
+        var start = max(0, first - 3)
+        last = min(cols.count - 1, last + 4)
         // 눌러서 데려갈 컬럼은 반드시 그려 둬야 그쪽으로 스크롤할 수 있다.
         if let jump = jumpColumn, let idx = cols.firstIndex(where: { $0.rawValue == jump }) {
-            first = min(first, idx)
+            start = min(start, idx)
             last = max(last, idx)
         }
-        return (first..<(last + 1), starts[first])
+        var leading = x
+        var i = first
+        while i > start { i -= 1; leading -= width(cols[i]) + 16 }
+        return (start..<(last + 1), max(0, leading))
     }
 
     /// 줄 머리(확정·행 번호·출처)의 너비 — 머리글과 본문이 같은 값을 써야 칸이 맞는다.
