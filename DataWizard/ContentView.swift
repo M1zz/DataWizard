@@ -9454,25 +9454,34 @@ struct PreviewWindowView: View {
                 }
                 .help("고른 두 컬럼을 한 칸으로 합칩니다. 앞에 있는 컬럼 이름이 남아요.")
             }
-            // 버튼 이름은 **지금 누르면 실제로 일어날 일**로 — ‘정리’ 같은 말은 무슨 뜻인지 모른다.
+            // 할 일이 둘이라 **버튼도 둘**이다 — 값을 옮길 것인가, 값을 다듬을 것인가.
+            // (‘정리’ 한 단어로 뭉뚱그리면 무엇이 일어날지 알 수 없다.)
             let many = model.selection.count >= 2
             let sending = !many && model.usingTemplate
                 && model.selection.contains { model.extraColumns.contains($0) }
             Button { requestClean() } label: {
-                Text(many ? "이 칸들 합쳐 채우기…"
-                          : (sending ? "틀 안으로 보내기…" : "이 칸 채우기…"))
+                Text(many ? "한 칸으로 합치기…"
+                          : (sending ? "틀 안으로 보내기…" : "여기 값 채우기…"))
             }
             .buttonStyle(.borderedProminent)
             .help(many
-                  ? "어느 칸에 어느 컬럼의 값을 넣을지 정합니다 — 이어 붙이기(성 + 이름)나 "
-                    + "값이 있는 것 하나만 중에 고를 수 있어요."
+                  ? "고른 칸들을 한 칸으로 모읍니다 — 이어 붙이기(성 + 이름)나 "
+                    + "값이 있는 것 하나만 중에 고를 수 있어요. 값은 자리를 옮깁니다."
                   : (sending ? "이 틀 밖 컬럼의 값을 틀 안의 어느 칸으로 보낼지 정합니다."
                              : "이 칸에 어느 컬럼의 값을 가져올지 정합니다."))
+
+            Button {
+                model.request = .clean(shownColumns.filter { model.selection.contains($0) })
+            } label: {
+                Text("오타·형식 정리…")
+            }
+            .help("값을 옮기지 않고 **그 자리에서** 다듬습니다 — 같은 뜻인데 다르게 적힌 값을 "
+                  + "하나로 모으고, 전화번호·날짜 형식을 맞추고, 오타를 짚어 줍니다.")
             Button("선택 해제") { model.selection = [] }
                 .controlSize(.small)
         } else if !model.rows.isEmpty {
             // 툴바가 좁아 두 줄로 접히면 오히려 안 읽힌다 — 한 줄로 짧게.
-            Text("머리글 네모 체크 → 채우기·합치기")
+            Text("머리글 네모 체크 → 옮기기 · 정리")
                 .font(.body).foregroundStyle(.secondary)
                 .lineLimit(1)
         }
