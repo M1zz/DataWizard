@@ -159,6 +159,8 @@ struct ContentView: View {
     @State private var generateFixed = ""
     @State private var generateSerial = "1"
     @State private var generateIsSerial = false
+    /// ‘이 값 채우기’ 창을 띄운 대상 칸.
+    @State private var fillTarget: UnifiedColumn?
     /// 미리보기 계산 순번 — 늦게 끝난 옛 계산이 새 결과를 덮지 않게.
     @State private var previewToken = 0
 
@@ -213,6 +215,8 @@ struct ContentView: View {
         .sheet(isPresented: $showFilterSheet) { rowFilterSheet }
         .sheet(isPresented: Binding(get: { generateColumn != nil },
                                     set: { if !$0 { generateColumn = nil } })) { generateSheet }
+        .sheet(isPresented: Binding(get: { fillTarget != nil },
+                                    set: { if !$0 { fillTarget = nil } })) { fillSheet }
         .sheet(item: $filePreview) { plan in
             FilePreviewSheet(plan: plan,
                              tint: fileTint(plans.firstIndex(where: { $0.id == plan.id }) ?? 0),
@@ -1109,18 +1113,8 @@ struct ContentView: View {
                         }
                         .buttonStyle(.borderedProminent)
                     }
-                    Button("다른 칸 고르기…") { configColumn = col }
-                    Button("여러 칸 합치기…") {
-                        var picked: [UnifiedColumn] = [col]
-                        picked += candidates.prefix(2).map(\.column)
-                        confirmMerge = picked.count >= 2 ? picked : [col] + outsideTemplateColumns.prefix(1)
-                    }
-                    Button("값 만들기…") {
-                        generateFixed = ""
-                        generateSerial = keyPatternText
-                        generateIsSerial = false
-                        generateColumn = col
-                    }
+                    Button("이 값 채우기…") { fillTarget = col }
+                    Button("파일별로 직접 고르기…") { configColumn = col }
                     Spacer()
                     Button("비워 두기") {
                         withAnimation { emptyIndex = (i + 1) % max(empties.count, 1) }
@@ -1134,6 +1128,61 @@ struct ContentView: View {
             .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .strokeBorder(Color.orange.opacity(0.35), lineWidth: 1))
         }
+    }
+
+    /// ‘이 값 채우기’ — 어디서 가져올지 고르고, 여럿이면 어떻게 넣을지 정한다.
+    @ViewBuilder
+    private var fillSheet: some View {
+        if let target = fillTarget {
+            FillColumnSheet(
+                target: target,
+                inTemplate: templateColumns.contains(target),
+                candidates: fillSourceCandidates(for: target),
+                onApply: { sources, separator in
+                    fillTarget = nil
+                    guard !sources.isEmpty else { return }
+                    focusColumns = [target]
+                    withBusy("‘\(target.rawValue)’를 채우는 중…") {
+                        applyColumnMerge(target: target, order: sources, separator: separator)
+                    }
+                },
+                onGenerate: {
+                    fillTarget = nil
+                    generateFixed = ""
+                    generateSerial = keyPatternText
+                    generateIsSerial = false
+                    generateColumn = target
+                },
+                onClose: { fillTarget = nil })
+        }
+    }
+
+    /// 이 칸에 넣을 만한 후보들 — **파일마다** 어떤 칸이 있는지 값 예시와 함께.
+    private func fillSourceCandidates(for target: UnifiedColumn)
+        -> [FillColumnSheet.Candidate] {
+        let recommended = Dictionary(uniqueKeysWithValues:
+            fillCandidates(for: target).map { ($0.column, $0.percent) })
+        var out: [FillColumnSheet.Candidate] = []
+        for (i, plan) in plans.enumerated() {
+            for header in plan.headers {
+                guard let col = UnifiedColumn(rawValue: header), col != target,
+                      plan.isMapped(col) else { continue }
+                // 이미 틀 안에서 제 몫을 하는 칸은 후보에서 빼 둔다 (틀 밖·빈 칸 위주로).
+                if templateColumns.contains(col), !cache.empty.contains(col),
+                   recommended[col] == nil { continue }
+                var samples: [String] = []
+                for row in plan.rows.prefix(80) {
+                    let v = plan.compose(col, from: row)
+                    if !v.isEmpty, !samples.contains(v) { samples.append(v) }
+                    if samples.count >= 3 { break }
+                }
+                guard !samples.isEmpty else { continue }
+                out.append(.init(column: col, fileName: plan.fileName, fileIndex: i,
+                                 samples: samples, percent: recommended[col]))
+            }
+        }
+        // 추천을 위로.
+        return out.sorted { ($0.percent ?? 0) > ($1.percent ?? 0) }
     }
 
     /// 빈 칸에 넣을 값을 만들어 주는 창 — 같은 값으로 채우거나, 번호를 매기거나.
@@ -1284,8 +1333,9 @@ struct ContentView: View {
                 }
                 .help("어느 칸에·어떤 순서로·무엇을 사이에 넣어 합칠지 정할 수 있어요.")
             }
-            if picked.count == 1, emptyColumns.contains(picked[0]) {
-                Button("채울 칸 고르기…") { configColumn = picked[0] }
+            if picked.count == 1 {
+                Button("이 값 채우기…") { fillTarget = picked[0] }
+                    .help("어디서 가져올지 고르고, 여럿이면 어떻게 넣을지 정합니다.")
             }
             if picked.count == 1 {
                 Button {
@@ -4942,6 +4992,10 @@ struct ContentView: View {
             confirmMerge = finalColumns.filter { $0 == a || $0 == b }
         case .edit(let col, let before, let after):
             withBusy("값을 바꾸는 중…") { editValue(col, from: before, to: after) }
+        case .fill(let col):
+            preview.selection = []
+            bringMainWindowToFront()
+            fillTarget = col
         case .confirmRow(let key, let on):
             if on { confirmedRowKeys.insert(key) } else { confirmedRowKeys.remove(key) }
             preview.confirmedRows = confirmedRowKeys
@@ -7680,6 +7734,7 @@ final class PreviewModel: ObservableObject {
         case merge(UnifiedColumn, UnifiedColumn)    // 두 컬럼을 한 칸으로
         case edit(UnifiedColumn, String, String)    // 컬럼 · 이전 값 · 새 값
         case confirmRow(String, Bool)               // 행 이름표 · 확정 여부
+        case fill(UnifiedColumn)                    // 이 칸 채우기 (어디서 → 어떻게)
     }
 
     /// 사용자가 고른 틀 이름 (있으면 그 파일에서 온 행임을 이름으로 보여 준다).
@@ -7984,6 +8039,8 @@ struct PreviewWindowView: View {
     @State private var query = ""
     @State private var improvedOnly = false
     @State private var unconfirmedOnly = false
+    /// 틀 밖 컬럼만 보기 — 어느 파일에서 온 값이 아직 안 옮겨졌는지 한눈에.
+    @State private var extrasOnly = false
     /// 눌러서 데려갈 컬럼 (표를 가로로 스크롤한다).
     @State private var jumpColumn: String?
     /// 값을 고치는 중인 셀 (컬럼 · 지금 값).
@@ -8001,6 +8058,12 @@ struct PreviewWindowView: View {
 
     private func width(_ c: UnifiedColumn) -> CGFloat {
         columnWidths[c.rawValue] ?? Self.defaultColumnWidth
+    }
+
+    /// 표에 그릴 컬럼 — `틀 밖 컬럼만` 을 켜면 그것들만.
+    private var shownColumns: [UnifiedColumn] {
+        guard extrasOnly, model.usingTemplate else { return model.columns }
+        return model.columns.filter { model.extraColumns.contains($0) }
     }
 
     /// 파일 색·컬럼 상태 색을 켤지 (기본 켬, 설정에 기억).
@@ -8118,6 +8181,12 @@ struct PreviewWindowView: View {
             .toggleStyle(.checkbox)
             .fixedSize()
             .help("아직 확정 표시를 안 한 행만 봅니다.")
+        if model.usingTemplate, !model.extraColumns.isEmpty {
+            Toggle(isOn: $extrasOnly) { Text("틀 밖 컬럼만 (\(model.extraColumns.count))") }
+                .toggleStyle(.checkbox)
+                .fixedSize()
+                .help("틀에 없는 컬럼만 봅니다 — 이 값들을 틀 안의 칸으로 옮기면 됩니다.")
+        }
         if !model.duplicateRows.isEmpty {
             Toggle(isOn: Binding(get: { model.showDuplicatesOnly },
                                  set: { model.showDuplicatesOnly = $0 })) {
@@ -8217,6 +8286,8 @@ struct PreviewWindowView: View {
             copyToClipboard(model.rows.map { $0[c] }.joined(separator: "\n"))
         }
         Button("표 전체 복사 (붙여넣기용)") { copyTable() }
+        Divider()
+        Button("‘\(c.rawValue)’ 값 채우기…") { model.request = .fill(c) }
     }
 
     private func copyToClipboard(_ text: String) {
@@ -8393,6 +8464,8 @@ struct PreviewWindowView: View {
         // 오른쪽 끝을 잡고 끌면 폭이 바뀐다.
         .overlay(alignment: .trailing) { widthHandle(c) }
         .contextMenu {
+            Button("이 값 채우기…") { model.request = .fill(c) }
+            Divider()
             Button("이 컬럼 폭 기본으로") { columnWidths[c.rawValue] = nil }
             Button("모든 컬럼 폭 기본으로") { columnWidths = [:] }
         }
@@ -8442,7 +8515,7 @@ struct PreviewWindowView: View {
         return VStack(spacing: 0) {
             LazyHStack(spacing: 0) {
                 rowHeadCell(i)
-                ForEach(model.columns, id: \.self) { c in
+                ForEach(shownColumns, id: \.self) { c in
                     bodyCell(c, row: row, at: i)
                 }
             }
@@ -8461,7 +8534,7 @@ struct PreviewWindowView: View {
                 .font(.body.weight(.semibold)).foregroundStyle(.secondary)
                 .frame(width: gutter, alignment: .leading)
                 .padding(.horizontal, 8).padding(.vertical, 6)
-            ForEach(model.columns, id: \.self) { c in
+            ForEach(shownColumns, id: \.self) { c in
                 headerCell(c).id("col:" + c.rawValue)
             }
         }

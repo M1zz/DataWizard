@@ -493,3 +493,187 @@ struct ColumnMergeSetupSheet: View {
         .buttonStyle(.plain)
     }
 }
+
+// MARK: - 이 칸 채우기 (어디서 → 어떻게)
+
+/// 틀 안의 칸 하나를 채우는 창. **어디서 가져올지**(파일별 칸 목록)를 먼저 고르고,
+/// 여러 개를 골랐으면 **어떻게 넣을지**(순서·사이에 넣을 것)를 정한다.
+struct FillColumnSheet: View {
+    struct Candidate: Identifiable {
+        let column: UnifiedColumn
+        let fileName: String
+        let fileIndex: Int
+        let samples: [String]
+        let percent: Int?          // 값으로 추천된 정도 (없으면 nil)
+        var id: String { fileName + "\u{1}" + column.rawValue }
+    }
+
+    let target: UnifiedColumn
+    let inTemplate: Bool
+    let candidates: [Candidate]
+    let onApply: (_ sources: [UnifiedColumn], _ separator: String) -> Void
+    let onGenerate: () -> Void
+    let onClose: () -> Void
+
+    @State private var picked: [UnifiedColumn] = []
+    @State private var separator = " "
+    @State private var custom = ""
+
+    /// 파일별로 묶어 보여 준다 — 어느 파일의 어느 칸인지 헷갈리지 않게.
+    private var byFile: [(file: String, items: [Candidate])] {
+        var order: [String] = []
+        var map: [String: [Candidate]] = [:]
+        for c in candidates {
+            if map[c.fileName] == nil { order.append(c.fileName) }
+            map[c.fileName, default: []].append(c)
+        }
+        return order.map { (file: $0, items: map[$0] ?? []) }
+    }
+
+    private var previewLine: String {
+        let parts = picked.compactMap { col in
+            candidates.first { $0.column == col }?.samples.first
+        }.filter { !$0.isEmpty }
+        return parts.isEmpty ? "—" : parts.joined(separator: separator)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("‘\(target.rawValue)’ 채우기").font(.title2.weight(.bold))
+                Text(inTemplate ? "틀 안의 칸이에요 — 여기에 값을 넣으면 완성본이 채워집니다."
+                                : "이 칸에 넣을 값을 고르세요.")
+                    .font(.body).foregroundStyle(.secondary)
+            }
+
+            Text("① 어디서 가져올까요?").font(.body.weight(.semibold))
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(byFile, id: \.file) { group in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(group.file)
+                                .font(.body.weight(.semibold)).foregroundStyle(.secondary)
+                                .lineLimit(1).truncationMode(.middle)
+                            ForEach(group.items) { item in
+                                sourceRow(item)
+                            }
+                        }
+                    }
+                    if candidates.isEmpty {
+                        Text("가져올 만한 칸을 못 찾았어요. 값을 직접 만들어 넣을 수 있습니다.")
+                            .font(.body).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .frame(maxHeight: 240)
+
+            if picked.count >= 2 {
+                Text("② 어떻게 넣을까요?").font(.body.weight(.semibold))
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(Array(picked.enumerated()), id: \.element) { idx, col in
+                        HStack(spacing: 8) {
+                            Text("\(idx + 1).").font(.body.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                            Text(col.rawValue).font(.body).lineLimit(1)
+                            Spacer(minLength: 8)
+                            Button { move(idx, by: -1) } label: { Image(systemName: "arrow.up") }
+                                .disabled(idx == 0)
+                            Button { move(idx, by: 1) } label: { Image(systemName: "arrow.down") }
+                                .disabled(idx == picked.count - 1)
+                        }
+                    }
+                    HStack(spacing: 8) {
+                        Text("사이에").font(.body)
+                        chip("붙여쓰기", "")
+                        chip("공백", " ")
+                        chip("쉼표", ", ")
+                        chip("하이픈", "-")
+                        TextField("직접", text: $custom)
+                            .textFieldStyle(.roundedBorder).frame(width: 80)
+                            .onChange(of: custom) { v in if !v.isEmpty { separator = v } }
+                    }
+                }
+            }
+
+            HStack(spacing: 8) {
+                Text("이렇게 됩니다").font(.body.weight(.semibold))
+                Text(previewLine)
+                    .font(.body).lineLimit(1)
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(RoundedRectangle(cornerRadius: 6)
+                        .fill(Color.accentColor.opacity(0.12)))
+            }
+
+            HStack {
+                Button("값 만들기…") { onGenerate() }
+                Spacer()
+                Button("취소") { onClose() }
+                Button("채우기") { onApply(picked, separator) }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(picked.isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 560)
+        .onAppear {
+            // 가장 그럴듯한 후보 하나를 미리 골라 둔다.
+            if picked.isEmpty, let best = candidates.first(where: { ($0.percent ?? 0) >= 70 }) {
+                picked = [best.column]
+            }
+        }
+    }
+
+    private func sourceRow(_ item: Candidate) -> some View {
+        let on = picked.contains(item.column)
+        return Button {
+            if on { picked.removeAll { $0 == item.column } } else { picked.append(item.column) }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: on ? "checkmark.square.fill" : "square")
+                    .foregroundStyle(on ? Color.accentColor : Color.secondary.opacity(0.7))
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 6) {
+                        Text(item.column.rawValue).font(.body).lineLimit(1)
+                        if let p = item.percent {
+                            Text("\(p)%")
+                                .font(.body.weight(.semibold)).foregroundStyle(Color.accentColor)
+                        }
+                    }
+                    Text(item.samples.prefix(3).joined(separator: " · "))
+                        .font(.body).foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.tail)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 8)
+                .fill(on ? Color.accentColor.opacity(0.10)
+                      : Color(nsColor: .controlBackgroundColor)))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func move(_ idx: Int, by delta: Int) {
+        let j = idx + delta
+        guard picked.indices.contains(j) else { return }
+        picked.swapAt(idx, j)
+    }
+
+    private func chip(_ title: String, _ value: String) -> some View {
+        let on = separator == value && custom.isEmpty
+        return Button {
+            custom = ""
+            separator = value
+        } label: {
+            Text(title)
+                .font(.body)
+                .padding(.horizontal, 10).padding(.vertical, 3)
+                .background(Capsule().fill(on ? Color.accentColor.opacity(0.18)
+                                              : Color.primary.opacity(0.06)))
+        }
+        .buttonStyle(.plain)
+    }
+}
