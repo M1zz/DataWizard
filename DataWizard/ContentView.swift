@@ -321,6 +321,8 @@ struct ContentView: View {
                     Divider()
                     workFileStrip
                     Divider()
+                    verificationBar
+                    Divider()
                     workColumnBar
                     Divider()
                     ScrollView {
@@ -1078,6 +1080,86 @@ struct ContentView: View {
         }
     }
 
+    /// 지금 해야 할 **한 가지** — 앱은 길잡이, 작업대(미리보기)는 실제 작업.
+    /// 급한 순서: 틀 빈 칸 → 틀 밖 컬럼 → 값 정리 → 중복 확인 → 끝.
+    private var nextStepHint: (text: String, column: UnifiedColumn?) {
+        if let col = emptyTemplateColumns.first {
+            return ("‘\(col.rawValue)’ 칸이 비어 있어요 — 어디서 가져올지 정해 주세요", col)
+        }
+        if let col = outsideTemplateColumns.first {
+            return ("‘\(col.rawValue)’는 틀 밖 컬럼이에요 — 틀 안의 칸으로 옮기세요", col)
+        }
+        if let first = cache.needClean.first {
+            return ("‘\(first.column.rawValue)’에 정리할 값이 \(first.note) 남았어요", first.column)
+        }
+        if let dup = base?.duplicateRows.count, dup > 0 {
+            return ("중복으로 보이는 행 \(dup)개를 확인해 주세요 (지울지는 직접 정합니다)", nil)
+        }
+        return ("더 할 일이 없어요 — 이대로 가져가면 됩니다", nil)
+    }
+
+    /// 지금 상태가 믿을 만한지 한 줄로 — 행 수·중복·빈 칸·정리할 값.
+    private var verificationBar: some View {
+        let total = plans.reduce(0) { $0 + $1.rows.count }
+        let result = base?.rows.count ?? total
+        let dup = base?.duplicateRows.count ?? 0
+        return HStack(spacing: 10) {
+            Text("지금 상태").font(.body.weight(.semibold))
+            checkChip(result == total ? "행 수 \(result) = \(total) ✓"
+                                      : "행 수 \(result) / \(total)",
+                      ok: result == total, action: nil)
+            if dup > 0 {
+                checkChip("중복 \(dup)행 표시됨", ok: false) {
+                    preview.showDuplicatesOnly = true
+                    openPreviewWindow()
+                }
+            }
+            if !emptyTemplateColumns.isEmpty {
+                checkChip("빈 칸 \(emptyTemplateColumns.count)개", ok: false) {
+                    if let c = emptyTemplateColumns.first { fillTarget = c }
+                }
+            }
+            if !outsideTemplateColumns.isEmpty {
+                checkChip("틀 밖 \(outsideTemplateColumns.count)개", ok: false) {
+                    focusColumns = Set(outsideTemplateColumns)
+                }
+            }
+            if !cache.needClean.isEmpty {
+                checkChip("정리할 값 \(cache.needClean.count)컬럼", ok: false) {
+                    if let c = cache.needClean.first?.column {
+                        focusColumns = [c]
+                        withBusy("검토 화면을 만드는 중…") { startWork() }
+                    }
+                }
+            }
+            if !preview.changes.isEmpty {
+                checkChip("바뀐 값 \(preview.changes.count)개", ok: true) { openPreviewWindow() }
+            }
+            Spacer(minLength: 8)
+        }
+        .padding(.horizontal, 24).padding(.vertical, 8)
+        .background(Color.primary.opacity(0.03))
+    }
+
+    @ViewBuilder
+    private func checkChip(_ text: String, ok: Bool, action: (() -> Void)?) -> some View {
+        let tint: Color = ok ? .green : .orange
+        if let action {
+            Button(action: action) { chipLabel(text, tint) }
+                .buttonStyle(.plain)
+        } else {
+            chipLabel(text, tint)
+        }
+    }
+
+    private func chipLabel(_ text: String, _ tint: Color) -> some View {
+        Text(text)
+            .font(.body.weight(.medium))
+            .foregroundStyle(tint)
+            .padding(.horizontal, 10).padding(.vertical, 3)
+            .background(Capsule().fill(tint.opacity(0.12)))
+    }
+
     /// 틀의 빈 칸을 하나씩 채우는 카드 — 가져오기 / 합치기 / 만들기 / 비워 두기.
     @ViewBuilder
     private var templateFillCard: some View {
@@ -1570,194 +1652,32 @@ struct ContentView: View {
         return nil
     }
 
-    /// 지금 합치면 이렇게 나온다 — 실제 값으로 보여 주는 미리보기.
+    /// 첫 화면에 끼워 넣은 **작업대** — 큰 창과 똑같은 화면이다.
+    /// (앱은 다음에 뭘 할지 안내하고, 실제 작업은 이 표에서 한다.)
     @ViewBuilder
     private var workPreviewCard: some View {
-        // 조각으로 나눠 둔다 — 한 덩어리로 두면 에디터(SourceKit)가 타입 추론을 포기하고
-        // ‘Ambiguous use of opacity’ 같은 엉뚱한 오류를 띄운다.
-        Group {
-            if !plans.isEmpty && !preview.rows.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    previewCardHeader
-                    previewTable
-                    previewLegend
+        if !plans.isEmpty && !preview.rows.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("작업대").font(.headline)
+                    Text("지금 상태 그대로의 결과입니다 — 여기서 바로 고치고 채울 수 있어요")
+                        .font(.body).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("큰 창으로 열기") { openPreviewWindow() }
+                        .controlSize(.small)
                 }
-                .padding(14)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(previewCardBackground)
+                PreviewWindowView(embedded: true)
+                    .frame(height: 420)
+                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color(nsColor: .textBackgroundColor)))
+                    .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color.primary.opacity(0.08), lineWidth: 1))
             }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.primary.opacity(0.03)))
         }
-    }
-
-    private var previewCardHeader: some View {
-        let sample = previewSampleRows()
-        let cols = preview.columns.isEmpty ? finalColumns : preview.columns
-        return HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text("완성본 미리보기").font(.headline)
-            Text("지금 상태 그대로 — 전체 \(preview.rows.count)행 중 \(sample.count)줄 · 컬럼 \(cols.count)개 (옆으로 밀어 보세요)")
-                .font(.body).foregroundStyle(.secondary)
-            Spacer()
-            Button("큰 창에서 보기") { openPreviewWindow() }
-                .controlSize(.small)
-        }
-    }
-
-    private var previewTable: some View {
-        // 컬럼은 전부 보여 준다 (가로도 lazy라 보이는 것만 그려진다).
-        let cols: [UnifiedColumn] = preview.columns.isEmpty ? finalColumns : preview.columns
-        let sample: [Int] = previewSampleRows()
-        let border: Color = Color.primary.opacity(0.08)
-        return ScrollView([.horizontal, .vertical]) {
-            VStack(alignment: .leading, spacing: 0) {
-                previewHeaderRow(cols)
-                ForEach(sample, id: \.self) { i in
-                    previewBodyRow(cols, at: i)
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: 220, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .fill(Color(nsColor: .textBackgroundColor)))
-        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .stroke(border, lineWidth: 1))
-    }
-
-    private var previewCardBackground: some View {
-        let fill: Color = Color.primary.opacity(0.03)
-        return RoundedRectangle(cornerRadius: 12, style: .continuous).fill(fill)
-    }
-
-    private func previewHeaderRow(_ cols: [UnifiedColumn]) -> some View {
-        LazyHStack(spacing: 0) {
-            Text("행 · 어느 파일에서")
-                .font(.body.weight(.semibold)).foregroundStyle(.secondary)
-                .frame(width: 150, alignment: .leading)
-                .padding(.horizontal, 8).padding(.vertical, 6)
-            ForEach(cols) { col in previewHeaderCell(col) }
-        }
-        .frame(height: 46)
-        .background(Color.primary.opacity(0.04))
-    }
-
-    /// 완성본 미리보기의 머리글 한 칸 — 이름 + 출처 점 + 사람 말 설명.
-    private func previewHeaderCell(_ col: UnifiedColumn) -> some View {
-        let split = isSplitColumn(col)
-        let here = (col == currentProposalColumn)
-        let owner = columnOwnerTint(col)
-        let owners = columnOwnerIndices(col)
-        let isEmpty = emptyColumns.contains(col)
-        let caption: String? = here ? "지금 볼 컬럼"
-            : (isEmpty ? "비어 있음 — 채울 칸을 골라 주세요"
-               : (split ? splitCaption(col)
-                  : (owners.isEmpty ? nil : (plans.count > 1 ? "모든 파일에 있음" : nil))))
-        // 주황 글씨는 눈이 아파서 신호는 점·배경으로만 주고, 글씨는 회색으로.
-        let captionTint: Color = here ? .accentColor : .secondary
-        let background: Color = here ? Color.accentColor.opacity(0.16)
-            : (owner?.opacity(0.16) ?? (split ? Color.orange.opacity(0.10) : Color.clear))
-        return VStack(alignment: .leading, spacing: 1) {
-            Text(col.rawValue)
-                .font(.body.weight(here ? .bold : .semibold))
-                .foregroundStyle(here ? Color.accentColor : .primary)
-                .lineLimit(1).truncationMode(.tail)
-            if let caption {
-                HStack(spacing: 4) {
-                    if !here && plans.count > 1 { ownerDots(col) }
-                    Text(caption)
-                        .font(.body).foregroundStyle(captionTint)
-                        .lineLimit(1).truncationMode(.tail)
-                }
-            }
-        }
-        .frame(width: 152, alignment: .leading)
-        .padding(.horizontal, 8).padding(.vertical, 6)
-        .background(background)
-        .overlay(alignment: .leading) { proposalEdge(here) }
-        .overlay(alignment: .trailing) { proposalEdge(here) }
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(split ? Color.orange.opacity(0.5) : Color.primary.opacity(0.1))
-                .frame(height: 1)
-        }
-        .help(splitCaption(col).map { "\(col.rawValue) — \($0)" } ?? col.rawValue)
-    }
-
-    private func previewBodyRow(_ cols: [UnifiedColumn], at i: Int) -> some View {
-        let row = preview.rows[i]
-        let tint = preview.fileTint(row: i)
-        let improved = preview.diff[i] ?? []
-        return LazyHStack(spacing: 0) {
-            HStack(spacing: 4) {
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(tint ?? Color.secondary.opacity(0.35))
-                    .frame(width: 3, height: 14)
-                if let badge = preview.rowBadge(row: i) {
-                    Text(badge)
-                        .font(.body.weight(.semibold)).foregroundStyle(.secondary)
-                        .padding(.horizontal, 4).padding(.vertical, 1)
-                        .background(Capsule().fill(Color.secondary.opacity(0.14)))
-                }
-                Text(preview.fileLabel(row: i))
-                    .font(.body).foregroundStyle(tint ?? .secondary)
-                    .lineLimit(1).truncationMode(.middle)
-            }
-            .frame(width: 150, alignment: .leading)
-            .padding(.horizontal, 8).padding(.vertical, 5)
-            .help(preview.rowOriginHelp(row: i))
-            ForEach(cols) { col in
-                previewBodyCell(col, value: row[col], improved: improved.contains(col))
-            }
-        }
-        .frame(height: 28)
-        .background(tint == nil ? Color.clear : tint!.opacity(0.10))
-    }
-
-    /// 이 컬럼이 어느 파일에 있는지 점으로 — 있는 파일은 그 색, 없는 파일은 빈 동그라미.
-    private func ownerDots(_ col: UnifiedColumn) -> some View {
-        let owners = Set(columnOwnerIndices(col))
-        return HStack(spacing: 2) {
-            ForEach(plans.indices, id: \.self) { i in
-                Circle()
-                    .fill(owners.contains(i) ? fileTint(i) : Color.clear)
-                    .overlay(Circle().stroke(owners.contains(i) ? Color.clear
-                                             : Color.secondary.opacity(0.5), lineWidth: 1))
-                    .frame(width: 6, height: 6)
-                    .help(plans[i].fileName + (owners.contains(i) ? "에 있음" : "엔 없음"))
-            }
-        }
-    }
-
-    /// 미리보기 셀 한 칸 — 배경색이 그 컬럼의 출처(파일)를 말해 준다.
-    private func previewBodyCell(_ col: UnifiedColumn, value: String,
-                                 improved: Bool) -> some View {
-        let here = (col == currentProposalColumn)
-        let background: Color = here ? Color.accentColor.opacity(0.10)
-            : (columnOwnerTint(col)?.opacity(0.07)
-               ?? (isSplitColumn(col) ? Color.orange.opacity(0.05) : Color.clear))
-        return Text(value.isEmpty ? "—" : value)
-            .font(.body)
-            .fontWeight(improved ? .medium : .regular)
-            .foregroundStyle(improved ? Color.accentColor
-                             : (value.isEmpty ? Color.secondary.opacity(0.5) : .primary))
-            .lineLimit(1).truncationMode(.tail)
-            .frame(width: 152, alignment: .leading)
-            .padding(.horizontal, 8).padding(.vertical, 5)
-            .background(background)
-            .overlay(alignment: .leading) { proposalEdge(here) }
-            .overlay(alignment: .trailing) { proposalEdge(here) }
-            .help(value)
-            .contextMenu {
-                Button("이 값 복사") { copyToPasteboard(value) }
-                    .disabled(value.isEmpty)
-                Button("‘\(col.rawValue)’ 열 전체 복사") {
-                    copyToPasteboard(preview.rows.map { $0[col] }.joined(separator: "\n"))
-                }
-                Divider()
-                Button("큰 창에서 고치기…") { openPreviewWindow() }
-            }
-    }
-
-    private func copyToPasteboard(_ text: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
     }
 
     private var previewLegend: some View {
@@ -5391,6 +5311,8 @@ struct ContentView: View {
         preview.pairHints = hints
         preview.columnOwners = owners
         preview.emptyColumns = Set(emptyColumns)
+        preview.nextHint = nextStepHint.text
+        preview.nextColumn = nextStepHint.column
         preview.usingTemplate = !templateColumns.isEmpty
         preview.extraColumns = templateColumns.isEmpty ? []
             : Set(finalColumns.filter { !templateColumns.contains($0) })
@@ -7762,6 +7684,9 @@ final class PreviewModel: ObservableObject {
     @Published var duplicateOf: [Int: Int] = [:]
     /// 값 정리가 바꾼 셀들 (이전 → 이후).
     @Published var changes: [ChangeRecord] = []
+    /// 작업대에 띄울 ‘지금 할 일’ 한 줄과, 그 일이 가리키는 칸.
+    @Published var nextHint = ""
+    @Published var nextColumn: UnifiedColumn?
     /// 창을 열 때 중복만 보여 줄지.
     @Published var showDuplicatesOnly = false
     /// 지금 결과를 다시 만드는 중인가 (백그라운드).
@@ -8049,6 +7974,8 @@ struct NonRestorableWindow: NSViewRepresentable {
 /// columns, improved cells highlighted, OK'd columns checked. Updates live
 /// while the user cleans data in the main window.
 struct PreviewWindowView: View {
+    /// 앱 화면 안에 끼워 넣은 것인가 (별도 창이 아니라).
+    var embedded = false
     @ObservedObject var model = PreviewModel.shared
     @State private var query = ""
     @State private var improvedOnly = false
@@ -8229,6 +8156,22 @@ struct PreviewWindowView: View {
     var body: some View {
         VStack(spacing: 0) {
             windowToolbar
+            if !model.nextHint.isEmpty {
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.turn.down.right").foregroundStyle(Color.accentColor)
+                    Text("지금 할 일").font(.body.weight(.semibold))
+                    Text(model.nextHint)
+                        .font(.body).foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.tail)
+                    Spacer(minLength: 8)
+                    if let c = model.nextColumn {
+                        Button("‘\(c.rawValue)’ 채우기…") { model.request = .fill(c) }
+                            .controlSize(.small)
+                    }
+                }
+                .padding(.horizontal, 16).padding(.vertical, 6)
+                .background(Color.accentColor.opacity(0.08))
+            }
 
             Divider()
 
@@ -8245,8 +8188,8 @@ struct PreviewWindowView: View {
                 legendBar
             }
         }
-        .frame(minWidth: 720, minHeight: 420)
-        .background(NonRestorableWindow())
+        .frame(minWidth: embedded ? 0 : 720, minHeight: embedded ? 0 : 420)
+        .background(embedded ? nil : NonRestorableWindow())
         .sheet(item: $editing) { editSheet($0) }
         .sheet(isPresented: $showChanges) {
             ChangeLogSheet(changes: model.changes, onClose: { showChanges = false })
@@ -8254,7 +8197,7 @@ struct PreviewWindowView: View {
         // 앱을 켤 때 저절로 뜨는(복원되는) 창은 닫는다 — 버튼으로 열었을 때만 남는다.
         // onAppear 시점엔 아직 창이 다 뜨지 않아 dismiss가 먹지 않을 수 있어 다음 차례로 미룬다.
         .onAppear {
-            guard !model.openedByUser else { return }
+            guard !embedded, !model.openedByUser else { return }
             DispatchQueue.main.async {
                 if model.openedByUser { return }
                 dismiss()
