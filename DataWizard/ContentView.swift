@@ -139,6 +139,10 @@ struct ContentView: View {
     // 멈췄다 이어서 하기 — 이전 세션 스냅샷(있으면 파일 화면에서 복원 제안).
     @Environment(\.scenePhase) private var scenePhase
     @State private var resumable: SessionSnapshot?
+    /// 앱을 켠 뒤 한 번만 자동으로 이어 연다.
+    @State private var didAutoResume = false
+    /// ‘새 작업 시작’ 확인 중인가 (저장해 둔 작업을 지우는 동작이라 한 번 묻는다).
+    @State private var confirmStartOver = false
     @State private var saveDebouncer = SaveDebouncer()
     /// 마지막으로 자동 저장한 시각 — 저장되고 있다는 걸 눈으로 확인시켜 준다.
     @State private var lastSavedAt: Date?
@@ -235,6 +239,14 @@ struct ContentView: View {
                                     set: { if !$0 { changePreviewColumn = nil } })) {
             changePreviewSheet
         }
+        .confirmationDialog("지금까지의 작업을 지우고 새로 시작할까요?",
+                            isPresented: $confirmStartOver, titleVisibility: .visible) {
+            Button("새로 시작", role: .destructive) { startOver() }
+            Button("그대로 두기", role: .cancel) { }
+        } message: {
+            Text("올린 파일과 지금까지 정한 것(틀·키·채운 칸·정리한 값)이 전부 지워집니다. "
+                 + "되돌릴 수 없어요.")
+        }
         .sheet(item: $filePreview) { plan in
             FilePreviewSheet(plan: plan,
                              tint: fileTint(plans.firstIndex(where: { $0.id == plan.id }) ?? 0),
@@ -282,7 +294,14 @@ struct ContentView: View {
         }
         // 이전 세션이 있으면 파일 화면에서 이어서 하기를 제안.
         .onAppear {
-            if resumable == nil { resumable = SessionStore.load() }
+            // 앱을 켜면 지난 작업을 **자동으로** 이어 연다 — 묻지 않는다.
+            // (다시 시작하려면 위쪽 ‘새 작업 시작…’ 버튼.)
+            if !didAutoResume {
+                didAutoResume = true
+                if plans.isEmpty, let saved = SessionStore.load() {
+                    withBusy("지난 작업을 이어 여는 중…") { restore(saved) }
+                }
+            }
             // 앱을 켜면서 시스템이 복원한 미리보기 창은 닫는다 (버튼으로 열 때만 보이게).
             if !preview.openedByUser {
                 DispatchQueue.main.async {
@@ -433,6 +452,8 @@ struct ContentView: View {
             .help("지금 합쳐진 결과를 큰 창으로 봅니다. 파일 색·컬럼 상태가 그대로 보여요.")
             Button("파일 더 넣기…") { pickWorkFiles() }
                 .disabled(isLoadingFiles)
+            Button("새 작업 시작…") { confirmStartOver = true }
+                .help("지금까지의 작업을 지우고 빈 화면에서 다시 시작합니다.")
             Button {
                 // 고른 게 없으면 막지 않는다 — 손 안 대고 그대로 뽑는 것도 정상적인 결과.
                 if focusColumns.isEmpty { runMerge() }
@@ -2653,12 +2674,6 @@ struct ContentView: View {
     private var workDropView: some View {
         VStack(spacing: 22) {
             Spacer(minLength: 0)
-
-            // 저장해 둔 작업이 있으면 **가장 먼저** 보여 준다 — 아래에 있으면 못 보고
-            // 파일부터 다시 올리게 되고, 그게 ‘매번 초기화되는’ 것처럼 보였다.
-            if let resumable {
-                resumeCard(resumable).frame(maxWidth: 600).padding(.horizontal, 40)
-            }
 
             workBaseInvite
                 .frame(maxWidth: 600)
@@ -5937,6 +5952,21 @@ struct ContentView: View {
     private func discardSession() {
         SessionStore.clear()
         resumable = nil
+    }
+
+    /// 저장해 둔 것까지 지우고 완전히 빈 화면으로 — ‘새 작업 시작’.
+    private func startOver() {
+        resetWork()
+        templateName = nil; templateColumns = []; templateValues = [:]
+        keyColumn = nil; keyColumnChosen = false
+        generatedColumns = [:]
+        deletedSourceIDs = []; filterColumn = nil; filterKeep = []
+        confirmedRowKeys = []
+        typeOverride = [:]; formatChoice = [:]; customFormat = [:]
+        mergeDone = []
+        cache = WorkCache()
+        lastSavedAt = nil
+        discardSession()
     }
 
     private func seedValueMap(from reviews: [ColumnReview]) {
