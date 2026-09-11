@@ -169,6 +169,8 @@ struct ContentView: View {
     @State private var changePreviewColumn: UnifiedColumn?
     /// 미리보기에서 여러 컬럼을 골라 ‘데이터 정리하기’를 누른 경우 — 그 선택 전체.
     @State private var fillFromSelection: [UnifiedColumn] = []
+    /// 값을 통째로 다른 컬럼으로 옮길 컬럼.
+    @State private var moveSource: UnifiedColumn?
     /// 미리보기 계산 순번 — 늦게 끝난 옛 계산이 새 결과를 덮지 않게.
     @State private var previewToken = 0
 
@@ -235,6 +237,8 @@ struct ContentView: View {
                                     set: { if !$0 { fillTarget = nil } })) { fillSheet }
         .sheet(isPresented: Binding(get: { !fillFromSelection.isEmpty },
                                     set: { if !$0 { fillFromSelection = [] } })) { fillFromSheet }
+        .sheet(isPresented: Binding(get: { moveSource != nil },
+                                    set: { if !$0 { moveSource = nil } })) { moveSheet }
         .sheet(isPresented: Binding(get: { changePreviewColumn != nil },
                                     set: { if !$0 { changePreviewColumn = nil } })) {
             changePreviewSheet
@@ -1473,6 +1477,49 @@ struct ContentView: View {
                 },
                 onClose: { fillFromSelection = [] })
         }
+    }
+
+    /// 한 컬럼의 값을 다른 컬럼으로 옮기는 창.
+    @ViewBuilder
+    private var moveSheet: some View {
+        if let source = moveSource {
+            let holeMap = Dictionary(uniqueKeysWithValues: cache.holes.map { ($0.column, $0.empty) })
+            // 받을 수 있는 컬럼 — 틀 안을 먼저, 그중에서도 빈 행이 많은 것부터.
+            let dests = finalColumns.filter { $0 != source }
+                .map { (column: $0,
+                        inTemplate: templateColumns.contains($0),
+                        blank: holeMap[$0] ?? (cache.empty.contains($0) ? (base?.rows.count ?? 0) : 0)) }
+                .sorted {
+                    if $0.inTemplate != $1.inTemplate { return $0.inTemplate }
+                    return $0.blank > $1.blank
+                }
+            MoveColumnSheet(
+                source: source,
+                destinations: dests,
+                rowTotal: base?.rows.count ?? 0,
+                sample: { col in firstSampleValue(col) },
+                onApply: { dest, order, separator, mode in
+                    moveSource = nil
+                    focusColumns = [dest]
+                    withBusy("‘\(source.rawValue)’의 값을 옮기는 중…") {
+                        applyColumnMerge(target: dest, order: order,
+                                         separator: separator, mode: mode)
+                        verifyRowCount("값을 옮긴")
+                    }
+                },
+                onClose: { moveSource = nil })
+        }
+    }
+
+    /// 이 컬럼의 값 하나 — 창에서 결과를 실제 값으로 보여 주기 위한 것.
+    private func firstSampleValue(_ col: UnifiedColumn) -> String {
+        for plan in plans where plan.isMapped(col) {
+            for row in plan.rows.prefix(60) {
+                let v = plan.compose(col, from: row)
+                if !v.isEmpty { return v }
+            }
+        }
+        return ""
     }
 
     /// 값을 **받을** 칸들. 빈 행이 있는 틀 안 칸이 1순위지만, 다 차 있는 칸이나
@@ -5236,6 +5283,10 @@ struct ContentView: View {
             preview.selection = []
             bringMainWindowToFront()
             fillTarget = col
+        case .move(let col):
+            preview.selection = []
+            bringMainWindowToFront()
+            moveSource = col
         case .fillFrom(let cols):
             let valid = cols.filter { finalColumns.contains($0) }
             guard !valid.isEmpty else { return }
@@ -8102,6 +8153,8 @@ final class PreviewModel: ObservableObject {
         /// 여러 컬럼을 골라 ‘데이터 정리하기’를 눌렀을 때 — 틀 안의 칸을 기준으로
         /// 어느 컬럼에서 값을 가져올지 먼저 묻는다.
         case fillFrom([UnifiedColumn])
+        /// 이 컬럼의 값을 통째로 다른 컬럼으로 옮기기.
+        case move(UnifiedColumn)
     }
 
     /// 사용자가 고른 틀 이름 (있으면 그 파일에서 온 행임을 이름으로 보여 준다).
@@ -8823,6 +8876,7 @@ struct PreviewWindowView: View {
         }
         Divider()
         Button("‘\(c.rawValue)’ 값 채우기…") { model.request = .fill(c) }
+        Button("‘\(c.rawValue)’ 값을 다른 컬럼으로 옮기기…") { model.request = .move(c) }
     }
 
     private func copyToClipboard(_ text: String) {
@@ -9060,6 +9114,7 @@ struct PreviewWindowView: View {
         .overlay(alignment: .trailing) { widthHandle(c) }
         .contextMenu {
             Button("이 값 채우기…") { model.request = .fill(c) }
+            Button("‘\(c.rawValue)’ 값을 다른 컬럼으로 옮기기…") { model.request = .move(c) }
             Divider()
             Button("이 컬럼 폭 기본으로") { columnWidths[c.rawValue] = nil }
             Button("모든 컬럼 폭 기본으로") { columnWidths = [:] }
