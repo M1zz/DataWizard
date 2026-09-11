@@ -834,7 +834,9 @@ struct FillFromSheet: View {
     /// 대상 컬럼 → 가져올 만한 후보들.
     let candidates: [UnifiedColumn: [Candidate]]
     let onApply: (_ pairs: [(target: UnifiedColumn, source: UnifiedColumn)]) -> Void
-    /// 값을 가져오는 게 아니라 형식만 다듬으러 갈 때.
+    /// 가져올 컬럼이 없을 때 — 패턴(고정값·번호 매기기)을 만들어 자동으로 채운다.
+    let onGenerate: (UnifiedColumn) -> Void
+    /// 값을 가져오는 게 아니라, 이미 있는 값의 오타·표기만 손보러 갈 때.
     let onCleanOnly: () -> Void
     let onClose: () -> Void
 
@@ -853,6 +855,10 @@ struct FillFromSheet: View {
                 Text("고른 컬럼 중 틀 안의 \(targets.count)개를 기준으로 세웠어요. "
                      + "칸마다 값을 가져올 컬럼을 고르면, 그 값이 이 칸으로 옮겨집니다. "
                      + "행 수는 그대로예요 — 값이 자리를 옮길 뿐입니다.")
+                    .font(.body).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("가져올 컬럼이 없는 칸은 오른쪽 ‘패턴으로 채우기’로 "
+                     + "같은 값이나 번호를 만들어 넣을 수 있어요.")
                     .font(.body).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 if !selectedOutside.isEmpty {
@@ -874,8 +880,9 @@ struct FillFromSheet: View {
             .frame(maxHeight: 360)
 
             HStack(spacing: 10) {
-                Button("값 형식만 다듬기…") { onCleanOnly() }
-                    .help("값을 가져오지 않고, 고른 컬럼의 오타·형식만 정리하러 갑니다.")
+                Button("이미 있는 값의 오타·표기 정리…") { onCleanOnly() }
+                    .help("값을 새로 가져오지 않고, 고른 컬럼에 이미 들어 있는 값만 손봅니다 — "
+                          + "같은 뜻인데 다르게 적힌 값을 하나로 모으고, 예시를 적으면 규칙을 찾아 한꺼번에 고칩니다.")
                 Spacer()
                 Button("닫기") { onClose() }
                 Button(chosen.isEmpty ? "가져오기" : "\(chosen.count)개 칸 채우기") {
@@ -921,6 +928,12 @@ struct FillFromSheet: View {
                 .labelsHidden()
                 .frame(maxWidth: .infinity)
                 .disabled(list.isEmpty)
+
+                // 가져올 데가 없는 칸(예: 지원연도·구분처럼 원본에 아예 없는 값)은
+                // 패턴을 만들어 채운다 — 같은 값 한 번에, 또는 6F10001부터 번호 매기기.
+                Button("패턴으로 채우기…") { onGenerate(t) }
+                    .fixedSize()
+                    .help("모든 행에 같은 값을 넣거나, 첫 번호를 적어 1씩 올라가는 번호를 만들어 넣습니다.")
             }
             if let sample, !sample.isEmpty {
                 Text("예: \(sample)")

@@ -1424,6 +1424,14 @@ struct ContentView: View {
                         applyColumnFills(pairs)
                     }
                 },
+                onGenerate: { col in
+                    // 가져올 데가 없는 칸 — 패턴(같은 값·번호 매기기)을 만들어 채운다.
+                    fillFromSelection = []
+                    generateFixed = ""
+                    generateSerial = keyPatternText
+                    generateIsSerial = false
+                    generateColumn = col
+                },
                 onCleanOnly: {
                     let cols = picked
                     fillFromSelection = []
@@ -6170,13 +6178,16 @@ struct ColumnDetailView: View {
         VStack(spacing: 0) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(columnName).font(.headline)
-                    Text((expandRaw ? "원본 \(rawValues.count)행 (전부 펼침) · \(valueKinds)종 값"
-                                    : "\(valueKinds)종 값 · \(totalRows)행")
+                    Text("‘\(columnName)’ 변화 미리보기").font(.headline)
+                    Text((changedKinds > 0
+                          ? "바뀌는 값 \(changedKinds)종 · 그대로 두는 값 \(max(valueKinds - changedKinds, 0))종"
+                          : "바뀌는 값이 없어요 — 전부 원본 그대로 나갑니다")
+                         + (expandRaw ? " · 원본 \(rawValues.count)행 전부 펼침"
+                                      : " · \(valueKinds)종 값 · \(totalRows)행")
                          + (!expandRaw && splitCount > 0 ? " · 출처 분리 \(values.count)행" : "")
-                         + (changedKinds > 0 ? " · ↪︎ 바뀐 값 \(changedKinds)종" : "")
                          + (anomalyReasons.isEmpty ? "" : " · ⚠︎ 점검 \(anomalyReasons.count)건"))
                         .font(.body).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer()
                 Button("닫기", action: onClose).keyboardShortcut(.cancelAction)
@@ -6295,8 +6306,11 @@ struct ColumnDetailView: View {
                                 Text("출처 키").frame(width: 150, alignment: .leading)
                                     .help("원본 파일에서 이 행을 찾는 식별자입니다. 파일당 한 컬럼으로 고정됩니다.\n"
                                           + (refInfo.isEmpty ? "" : refInfo))
-                                Text("이전 값").frame(maxWidth: .infinity, alignment: .leading)
-                                Text("이후 값").frame(maxWidth: .infinity, alignment: .leading)
+                                Text("지금 값 (원본)")
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                Text("바뀔 값 (완성본)")
+                                    .foregroundStyle(changedKinds > 0 ? Color.accentColor : .secondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
                                 if showsSource { Text("출처 파일").frame(width: 160, alignment: .leading) }
                                 if !expandRaw { Text("건수").frame(width: 56, alignment: .trailing) }
                             }
@@ -6314,7 +6328,9 @@ struct ColumnDetailView: View {
         .onAppear {
             guard !didPickInitialSort else { return }
             didPickInitialSort = true
-            if !anomalyReasons.isEmpty { sort = .anomalyFirst }
+            // 무엇이 달라지는지부터 — 바뀌는 값이 있으면 그게 먼저다.
+            if changedKinds > 0 { sort = .changedFirst }
+            else if !anomalyReasons.isEmpty { sort = .anomalyFirst }
         }
     }
 }
@@ -6514,9 +6530,9 @@ struct ReviewSection<Content: View>: View {
                     }
                     if let onDetail {
                         Button(action: onDetail) {
-                            Label("값 살펴보기", systemImage: "list.bullet.rectangle")
+                            Label("변화 미리보기", systemImage: "arrow.left.arrow.right")
                         }
-                        .help("이 컬럼의 모든 값을 이전 값 → 이후 값으로 하나하나 훑어보고 싶을 때.")
+                        .help("이 컬럼이 **지금 값 → 바뀔 값**으로 어떻게 달라지는지 나란히 놓고 봅니다.")
                     }
                     if let onConfigure {
                         Button(action: onConfigure) {
