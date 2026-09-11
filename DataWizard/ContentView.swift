@@ -8924,20 +8924,21 @@ struct PreviewWindowView: View {
                 }
                 .help("고른 두 컬럼을 한 칸으로 합칩니다. 앞에 있는 컬럼 이름이 남아요.")
             }
+            // 버튼 이름은 **지금 누르면 실제로 일어날 일**로 — ‘정리’ 같은 말은 무슨 뜻인지 모른다.
             let willFill = model.usingTemplate
                 && model.selection.contains { (model.holeCounts[$0] ?? 0) > 0 }
             Button { requestClean() } label: {
-                Label("데이터 정리하기", systemImage: "wand.and.stars")
+                Text(willFill ? "이 칸들 채우기…" : "값 형식 맞추기…")
             }
             .buttonStyle(.borderedProminent)
             .help(willFill
                   ? "고른 것 중 틀 안의 빈 칸부터 — 어느 컬럼에서 값을 가져올지 물어봅니다."
-                  : "고른 컬럼의 값 형식을 통일하러 갑니다.")
+                  : "고른 컬럼에서 같은 뜻인데 다르게 적힌 값을 하나로 맞춥니다.")
             Button("선택 해제") { model.selection = [] }
                 .controlSize(.small)
         } else if !model.rows.isEmpty {
             // 툴바가 좁아 두 줄로 접히면 오히려 안 읽힌다 — 한 줄로 짧게.
-            Text("머리글 네모 체크 → 정리·합치기")
+            Text("머리글 네모 체크 → 채우기·합치기")
                 .font(.body).foregroundStyle(.secondary)
                 .lineLimit(1)
         }
