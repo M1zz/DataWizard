@@ -8789,7 +8789,20 @@ struct PreviewWindowView: View {
 
     /// 창 위쪽 줄 — 요약·선택 동작·보기 옵션. (한 덩어리로 두면 타입 체크가 버거워
     /// 조각으로 나눠 둔다.)
+    /// 창 위쪽 — **위는 지금 상태, 아래는 할 수 있는 일**로 두 줄로 나눠 둔다.
+    /// (한 줄에 몰아 두니 무엇이 정보고 무엇이 버튼인지 구분이 안 됐다.)
     private var windowToolbar: some View {
+        VStack(spacing: 0) {
+            statusRow
+            if !model.rows.isEmpty {
+                Divider().opacity(0.4)
+                toolRow
+            }
+        }
+    }
+
+    /// 첫 줄: 지금 표가 어떤 상태인지 (읽는 줄) + 값 검색.
+    private var statusRow: some View {
         HStack(spacing: 10) {
             Label("완성본 미리보기", systemImage: "eye")
                 .font(.headline)
@@ -8802,10 +8815,27 @@ struct PreviewWindowView: View {
                 summaryChips
             }
             Spacer(minLength: 8)
-            selectionActions
-            if !model.rows.isEmpty { viewOptions }
+            if !model.rows.isEmpty {
+                TextField("값 검색…", text: $query)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 170)
+                    .fixedSize()
+            }
         }
-        .padding(.horizontal, 16).padding(.vertical, 10)
+        .padding(.horizontal, 16).padding(.top, 10).padding(.bottom, 8)
+    }
+
+    /// 둘째 줄: 지금 누를 수 있는 것들. 왼쪽은 **고른 컬럼에 하는 일**,
+    /// 오른쪽은 **표 전체에 하는 일**(보기·복사·내보내기).
+    private var toolRow: some View {
+        HStack(spacing: 8) {
+            selectionActions
+            Spacer(minLength: 8)
+            Divider().frame(height: 18)
+            viewOptions
+        }
+        .padding(.horizontal, 16).padding(.vertical, 8)
+        .background(Color(nsColor: .underPageBackgroundColor).opacity(0.6))
     }
 
     @ViewBuilder
@@ -8944,7 +8974,6 @@ struct PreviewWindowView: View {
         } label: {
             Label(filtersOn ? "보기 ●" : "보기", systemImage: "line.3.horizontal.decrease.circle")
         }
-        .menuStyle(.borderlessButton)
         .fixedSize()
         .help("무엇을 보여 줄지 고릅니다 — 채울 칸만, 틀 밖 재료만, 중복만…")
         if !model.changes.isEmpty {
@@ -8972,7 +9001,6 @@ struct PreviewWindowView: View {
         } label: {
             Label("복사", systemImage: "doc.on.doc")
         }
-        .menuStyle(.borderlessButton)
         .fixedSize()
         .help("표를 탭 구분으로 복사합니다 — 엑셀·구글 시트에 그대로 붙습니다. "
               + "머리글 네모를 체크해 두면 그 컬럼만 복사할 수 있어요.")
@@ -8987,14 +9015,9 @@ struct PreviewWindowView: View {
         } label: {
             Label("내보내기", systemImage: "square.and.arrow.down")
         }
-        .menuStyle(.borderlessButton)
         .fixedSize()
         .help("지금 보이는 표를 그대로 파일로 저장합니다. "
               + "머리글을 골라 두면 고른 컬럼만, 보기를 좁혀 두면 그 행만 나갑니다.")
-        TextField("값 검색…", text: $query)
-            .textFieldStyle(.roundedBorder)
-            .frame(width: 150)
-            .fixedSize()
     }
 
     /// 지금 표를 좁혀 보고 있는가 (메뉴 버튼에 점을 찍어 알려 준다).
