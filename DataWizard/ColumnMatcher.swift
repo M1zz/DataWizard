@@ -810,3 +810,147 @@ struct ChangeLogSheet: View {
         NSPasteboard.general.setString(lines.joined(separator: "\n"), forType: .string)
     }
 }
+
+/// 여러 컬럼을 한꺼번에 고른 다음 ‘데이터 정리하기’를 눌렀을 때 나오는 창.
+/// 틀 안의 칸을 **기준**으로 세워 두고, 그 칸마다 **틀 밖의 어느 컬럼에서
+/// 값을 가져올지**를 한 줄씩 정한다. (이 도구의 목표가 틀 안의 행을 채우는 것이므로,
+/// 값 형식을 다듬는 일보다 이 결정이 먼저다.)
+struct FillFromSheet: View {
+    struct Candidate: Identifiable {
+        let column: UnifiedColumn
+        let fileName: String
+        let samples: [String]
+        let percent: Int?          // 값 모양으로 추천된 정도
+        var id: String { fileName + "\u{1}" + column.rawValue }
+    }
+
+    /// 값을 채워야 할 틀 안 컬럼 — 빈 행이 많은 순서.
+    let targets: [UnifiedColumn]
+    /// 컬럼마다 비어 있는 행 수와, 전체 행 수.
+    let holes: [UnifiedColumn: Int]
+    let rowTotal: Int
+    /// 이번에 함께 고른 틀 밖 컬럼들 (먼저 보여 준다).
+    let selectedOutside: [UnifiedColumn]
+    /// 대상 컬럼 → 가져올 만한 후보들.
+    let candidates: [UnifiedColumn: [Candidate]]
+    let onApply: (_ pairs: [(target: UnifiedColumn, source: UnifiedColumn)]) -> Void
+    /// 값을 가져오는 게 아니라 형식만 다듬으러 갈 때.
+    let onCleanOnly: () -> Void
+    let onClose: () -> Void
+
+    /// 대상 → 고른 출처 (안 고르면 그대로 둔다).
+    @State private var pick: [UnifiedColumn: UnifiedColumn] = [:]
+    @State private var didSeed = false
+
+    private var chosen: [(target: UnifiedColumn, source: UnifiedColumn)] {
+        targets.compactMap { t in pick[t].map { (target: t, source: $0) } }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("틀 안의 칸을 어디서 채울까요?").font(.title2.weight(.bold))
+                Text("고른 컬럼 중 틀 안의 \(targets.count)개를 기준으로 세웠어요. "
+                     + "칸마다 값을 가져올 컬럼을 고르면, 그 값이 이 칸으로 옮겨집니다. "
+                     + "행 수는 그대로예요 — 값이 자리를 옮길 뿐입니다.")
+                    .font(.body).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if !selectedOutside.isEmpty {
+                    Text("함께 고른 틀 밖 컬럼: "
+                         + selectedOutside.prefix(6).map(\.rawValue).joined(separator: " · ")
+                         + (selectedOutside.count > 6 ? " 외 \(selectedOutside.count - 6)개" : ""))
+                        .font(.body).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(targets, id: \.self) { t in
+                        targetRow(t)
+                    }
+                }
+            }
+            .frame(maxHeight: 360)
+
+            HStack(spacing: 10) {
+                Button("값 형식만 다듬기…") { onCleanOnly() }
+                    .help("값을 가져오지 않고, 고른 컬럼의 오타·형식만 정리하러 갑니다.")
+                Spacer()
+                Button("닫기") { onClose() }
+                Button(chosen.isEmpty ? "가져오기" : "\(chosen.count)개 칸 채우기") {
+                    onApply(chosen)
+                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+                .disabled(chosen.isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 720)
+        .onAppear { if !didSeed { seed(); didSeed = true } }
+    }
+
+    /// 한 줄 = 틀 안의 칸 하나. 왼쪽이 기준(틀 안), 오른쪽이 가져올 곳(틀 밖).
+    private func targetRow(_ t: UnifiedColumn) -> some View {
+        let list = candidates[t] ?? []
+        let blank = holes[t] ?? 0
+        let sample = pick[t].flatMap { p in list.first { $0.column == p }?.samples.first }
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(t.rawValue).font(.body.weight(.semibold))
+                        .lineLimit(1).truncationMode(.tail)
+                    Text(blank > 0 ? "\(blank)/\(rowTotal)행 비어 있음" : "다 차 있음")
+                        .font(.body).monospacedDigit()
+                        .foregroundStyle(blank > 0 ? Color.accentColor : .secondary)
+                }
+                .frame(width: 240, alignment: .leading)
+
+                Image(systemName: "arrow.left").foregroundStyle(.secondary)
+
+                Picker("", selection: Binding(get: { pick[t] },
+                                              set: { pick[t] = $0 })) {
+                    Text("그대로 두기").tag(UnifiedColumn?.none)
+                    ForEach(list) { c in
+                        Text(c.percent.map { "\(c.column.rawValue) — \($0)% 닮음" }
+                             ?? c.column.rawValue)
+                            .tag(UnifiedColumn?.some(c.column))
+                    }
+                }
+                .labelsHidden()
+                .frame(maxWidth: .infinity)
+                .disabled(list.isEmpty)
+            }
+            if let sample, !sample.isEmpty {
+                Text("예: \(sample)")
+                    .font(.body).foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.tail)
+                    .padding(.leading, 248)
+            } else if list.isEmpty {
+                Text("가져올 만한 컬럼을 못 찾았어요 — 표에서 그 컬럼도 같이 골라 주세요.")
+                    .font(.body).foregroundStyle(.secondary)
+                    .padding(.leading, 248)
+            }
+        }
+        .padding(.vertical, 6).padding(.horizontal, 10)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(pick[t] == nil ? Color.primary.opacity(0.03)
+                                 : Color.accentColor.opacity(0.08)))
+    }
+
+    /// 값 모양이 닮은 짝만 미리 골라 둔다. 한 컬럼을 여러 칸에 동시에 넣는 일은 없게
+    /// 이미 쓴 출처는 건너뛴다 — 확실하지 않은 건 사람이 고르게 둔다.
+    private func seed() {
+        let selected = Set(selectedOutside)
+        var used = Set<UnifiedColumn>()
+        for t in targets {
+            let list = candidates[t] ?? []
+            guard let best = list.first(where: {
+                selected.contains($0.column) && ($0.percent ?? 0) > 0 && !used.contains($0.column)
+            }) else { continue }
+            pick[t] = best.column
+            used.insert(best.column)
+        }
+    }
+}

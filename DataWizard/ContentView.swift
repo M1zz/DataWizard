@@ -161,6 +161,8 @@ struct ContentView: View {
     @State private var generateIsSerial = false
     /// ‘이 값 채우기’ 창을 띄운 대상 칸.
     @State private var fillTarget: UnifiedColumn?
+    /// 미리보기에서 여러 컬럼을 골라 ‘데이터 정리하기’를 누른 경우 — 그 선택 전체.
+    @State private var fillFromSelection: [UnifiedColumn] = []
     /// 미리보기 계산 순번 — 늦게 끝난 옛 계산이 새 결과를 덮지 않게.
     @State private var previewToken = 0
 
@@ -225,6 +227,8 @@ struct ContentView: View {
                                     set: { if !$0 { generateColumn = nil } })) { generateSheet }
         .sheet(isPresented: Binding(get: { fillTarget != nil },
                                     set: { if !$0 { fillTarget = nil } })) { fillSheet }
+        .sheet(isPresented: Binding(get: { !fillFromSelection.isEmpty },
+                                    set: { if !$0 { fillFromSelection = [] } })) { fillFromSheet }
         .sheet(item: $filePreview) { plan in
             FilePreviewSheet(plan: plan,
                              tint: fileTint(plans.firstIndex(where: { $0.id == plan.id }) ?? 0),
@@ -1146,6 +1150,16 @@ struct ContentView: View {
     private func applyColumnMerge(target: UnifiedColumn,
                                   order: [UnifiedColumn],
                                   separator: String) {
+        mutatePlans(target: target, order: order, separator: separator)
+        rebuildWorkColumns()
+        scheduleSave()
+    }
+
+    /// 계획(파일별 컬럼 매핑)만 고친다 — **행은 건드리지 않는다.**
+    /// 여러 칸을 연달아 채울 때 이걸 여러 번 부르고 마지막에 한 번만 다시 만든다.
+    private func mutatePlans(target: UnifiedColumn,
+                             order: [UnifiedColumn],
+                             separator: String) {
         for i in plans.indices {
             var sources: [String] = []
             for col in order {
@@ -1172,8 +1186,6 @@ struct ContentView: View {
             formatChoice[col] = nil
             customFormat[col] = nil
         }
-        rebuildWorkColumns()
-        scheduleSave()
     }
 
     // MARK: - 틀의 빈 칸 채우기
@@ -1377,6 +1389,88 @@ struct ContentView: View {
                 },
                 onClose: { fillTarget = nil })
         }
+    }
+
+    /// 여러 컬럼을 고른 뒤 ‘데이터 정리하기’를 눌렀을 때 — 틀 안의 칸마다
+    /// 어느 컬럼에서 값을 가져올지 한 줄씩 정하는 창.
+    @ViewBuilder
+    private var fillFromSheet: some View {
+        if !fillFromSelection.isEmpty {
+            let picked = fillFromSelection
+            // 기준이 되는 칸: 고른 것 중 **틀 안이면서 아직 빈 행이 있는** 컬럼.
+            let holeMap = Dictionary(uniqueKeysWithValues: cache.holes.map { ($0.column, $0.empty) })
+            let targets = picked
+                .filter { templateColumns.contains($0) && (holeMap[$0] ?? 0) > 0 }
+                .sorted { (holeMap[$0] ?? 0) > (holeMap[$1] ?? 0) }
+            let outside = picked.filter { !templateColumns.contains($0) }
+            FillFromSheet(
+                targets: targets,
+                holes: holeMap,
+                rowTotal: base?.rows.count ?? 0,
+                selectedOutside: outside,
+                candidates: Dictionary(uniqueKeysWithValues:
+                    targets.map { ($0, fillFromCandidates(for: $0, preferring: outside)) }),
+                onApply: { pairs in
+                    fillFromSelection = []
+                    guard !pairs.isEmpty else { return }
+                    focusColumns = Set(pairs.map(\.target))
+                    withBusy("\(pairs.count)개 칸을 채우는 중…") {
+                        applyColumnFills(pairs)
+                    }
+                },
+                onCleanOnly: {
+                    let cols = picked
+                    fillFromSelection = []
+                    focusColumns = Set(cols)
+                    withBusy("검토 화면을 만드는 중…") { startWork() }
+                },
+                onClose: { fillFromSelection = [] })
+        }
+    }
+
+    /// 이 칸에 넣을 만한 후보 — 함께 고른 틀 밖 컬럼을 맨 앞에 세운다.
+    private func fillFromCandidates(for target: UnifiedColumn,
+                                    preferring outside: [UnifiedColumn])
+        -> [FillFromSheet.Candidate] {
+        let recommended = Dictionary(uniqueKeysWithValues:
+            fillCandidates(for: target).map { ($0.column, $0.percent) })
+        let prefer = Set(outside)
+        var seen = Set<UnifiedColumn>()
+        var out: [FillFromSheet.Candidate] = []
+        for (_, plan) in plans.enumerated() {
+            for header in plan.headers {
+                guard let col = UnifiedColumn(rawValue: header), col != target,
+                      plan.isMapped(col), seen.insert(col).inserted else { continue }
+                // 틀 안에서 이미 제 몫을 하는 칸은 빼 둔다 (틀 밖·빈 칸 위주로).
+                if templateColumns.contains(col), !cache.empty.contains(col),
+                   recommended[col] == nil, !prefer.contains(col) { continue }
+                var samples: [String] = []
+                for row in plan.rows.prefix(60) {
+                    let v = plan.compose(col, from: row)
+                    if !v.isEmpty, !samples.contains(v) { samples.append(v) }
+                    if samples.count >= 2 { break }
+                }
+                guard !samples.isEmpty else { continue }
+                out.append(.init(column: col, fileName: plan.fileName,
+                                 samples: samples, percent: recommended[col]))
+            }
+        }
+        // 함께 고른 컬럼 → 닮은 정도 순.
+        return out.sorted {
+            let a = (prefer.contains($0.column) ? 1000 : 0) + ($0.percent ?? 0)
+            let b = (prefer.contains($1.column) ? 1000 : 0) + ($1.percent ?? 0)
+            return a > b
+        }
+    }
+
+    /// 여러 칸을 한 번에 채운다 — 계획만 고쳐 두고 **다시 만드는 건 마지막에 한 번**.
+    private func applyColumnFills(_ pairs: [(target: UnifiedColumn, source: UnifiedColumn)]) {
+        for pair in pairs {
+            mutatePlans(target: pair.target, order: [pair.source], separator: " ")
+        }
+        rebuildWorkColumns()
+        verifyRowCount("칸을 채운")
+        scheduleSave()
     }
 
     /// 이 칸에 넣을 만한 후보들 — **파일마다** 어떤 칸이 있는지 값 예시와 함께.
@@ -5052,6 +5146,12 @@ struct ContentView: View {
             preview.selection = []
             bringMainWindowToFront()
             fillTarget = col
+        case .fillFrom(let cols):
+            let valid = cols.filter { finalColumns.contains($0) }
+            guard !valid.isEmpty else { return }
+            preview.selection = []
+            bringMainWindowToFront()
+            fillFromSelection = valid
         case .confirmRow(let key, let on):
             if on { confirmedRowKeys.insert(key) } else { confirmedRowKeys.remove(key) }
             preview.confirmedRows = confirmedRowKeys
@@ -7837,6 +7937,9 @@ final class PreviewModel: ObservableObject {
         case edit(UnifiedColumn, String, String)    // 컬럼 · 이전 값 · 새 값
         case confirmRow(String, Bool)               // 행 이름표 · 확정 여부
         case fill(UnifiedColumn)                    // 이 칸 채우기 (어디서 → 어떻게)
+        /// 여러 컬럼을 골라 ‘데이터 정리하기’를 눌렀을 때 — 틀 안의 칸을 기준으로
+        /// 어느 컬럼에서 값을 가져올지 먼저 묻는다.
+        case fillFrom([UnifiedColumn])
     }
 
     /// 사용자가 고른 틀 이름 (있으면 그 파일에서 온 행임을 이름으로 보여 준다).
@@ -8821,11 +8924,15 @@ struct PreviewWindowView: View {
                 }
                 .help("고른 두 컬럼을 한 칸으로 합칩니다. 앞에 있는 컬럼 이름이 남아요.")
             }
+            let willFill = model.usingTemplate
+                && model.selection.contains { (model.holeCounts[$0] ?? 0) > 0 }
             Button { requestClean() } label: {
                 Label("데이터 정리하기", systemImage: "wand.and.stars")
             }
             .buttonStyle(.borderedProminent)
-            .help("고른 컬럼의 값 형식을 통일하러 갑니다.")
+            .help(willFill
+                  ? "고른 것 중 틀 안의 빈 칸부터 — 어느 컬럼에서 값을 가져올지 물어봅니다."
+                  : "고른 컬럼의 값 형식을 통일하러 갑니다.")
             Button("선택 해제") { model.selection = [] }
                 .controlSize(.small)
         } else if !model.rows.isEmpty {
@@ -8837,9 +8944,12 @@ struct PreviewWindowView: View {
     }
 
     private func requestClean() {
-        let cols = model.columns.filter { model.selection.contains($0) }
+        let cols = shownColumns.filter { model.selection.contains($0) }
         guard !cols.isEmpty else { return }
-        model.request = .clean(cols)
+        // 고른 것 중에 ‘틀 안인데 아직 빈 행이 있는 칸’이 있으면, 값 형식을 다듬기 전에
+        // **어디서 가져올지**부터 묻는다 — 이 도구의 목표가 그 칸을 채우는 것이므로.
+        let needsFilling = cols.contains { (model.holeCounts[$0] ?? 0) > 0 }
+        model.request = (model.usingTemplate && needsFilling) ? .fillFrom(cols) : .clean(cols)
     }
 
     private func requestMerge() {
