@@ -856,7 +856,7 @@ struct FillFromSheet: View {
     /// 컬럼마다 비어 있는 행 수와, 전체 행 수.
     let holes: [UnifiedColumn: Int]
     let rowTotal: Int
-    /// 이번에 함께 고른 틀 밖 컬럼들 (먼저 보여 준다).
+    /// 이번에 함께 고른 컬럼들 (후보 맨 위에 따로 모아 보여 준다).
     let selectedOutside: [UnifiedColumn]
     /// 대상 컬럼 → 가져올 만한 후보들.
     let candidates: [UnifiedColumn: [Candidate]]
@@ -899,7 +899,7 @@ struct FillFromSheet: View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("틀 안의 칸을 어디서 채울까요?").font(.title2.weight(.bold))
-                Text("고른 컬럼 중 틀 안의 \(targets.count)개를 기준으로 세웠어요. "
+                Text("고른 것 중 \(targets.count)개를 값을 받을 칸으로 세웠어요. "
                      + "칸마다 값을 가져올 컬럼을 고르면 그 값이 이 칸으로 옮겨집니다. "
                      + "행 수는 그대로예요 — 값이 자리를 옮길 뿐입니다.")
                     .font(.body).foregroundStyle(.secondary)
@@ -956,9 +956,11 @@ struct FillFromSheet: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(t.rawValue).font(.body.weight(.semibold))
                         .lineLimit(1).truncationMode(.tail)
-                    Text(blank > 0 ? "\(blank)/\(rowTotal)행 비어 있음" : "다 차 있음")
+                    Text(blank > 0 ? "\(blank)/\(rowTotal)행 비어 있음"
+                                   : (picked.isEmpty ? "다 차 있음" : "지금 값은 새 값으로 바뀜"))
                         .font(.body).monospacedDigit()
-                        .foregroundStyle(blank > 0 ? Color.accentColor : .secondary)
+                        .foregroundStyle(blank > 0 ? Color.accentColor
+                                         : (picked.isEmpty ? .secondary : .orange))
                 }
                 .frame(width: 220, alignment: .leading)
 

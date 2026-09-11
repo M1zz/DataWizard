@@ -1434,19 +1434,19 @@ struct ContentView: View {
     private var fillFromSheet: some View {
         if !fillFromSelection.isEmpty {
             let picked = fillFromSelection
-            // 기준이 되는 칸: 고른 것 중 **틀 안이면서 아직 빈 행이 있는** 컬럼.
             let holeMap = Dictionary(uniqueKeysWithValues: cache.holes.map { ($0.column, $0.empty) })
-            let targets = picked
-                .filter { templateColumns.contains($0) && (holeMap[$0] ?? 0) > 0 }
-                .sorted { (holeMap[$0] ?? 0) > (holeMap[$1] ?? 0) }
-            let outside = picked.filter { !templateColumns.contains($0) }
+            let targets = fillTargets(picked, holes: holeMap)
             FillFromSheet(
                 targets: targets,
                 holes: holeMap,
                 rowTotal: base?.rows.count ?? 0,
-                selectedOutside: outside,
+                // 함께 고른 컬럼은 전부 후보 맨 위로 (틀 안이든 밖이든).
+                selectedOutside: picked,
                 candidates: Dictionary(uniqueKeysWithValues:
-                    targets.map { ($0, fillFromCandidates(for: $0, preferring: outside)) }),
+                    targets.map { t in
+                        (t, fillFromCandidates(for: t,
+                                               preferring: picked.filter { $0 != t }))
+                    }),
                 onApply: { plan, thenClean in
                     fillFromSelection = []
                     guard !plan.isEmpty else { return }
@@ -1473,6 +1473,19 @@ struct ContentView: View {
                 },
                 onClose: { fillFromSelection = [] })
         }
+    }
+
+    /// 값을 **받을** 칸들. 빈 행이 있는 틀 안 칸이 1순위지만, 다 차 있는 칸이나
+    /// 틀 밖 칸도 받는 자리가 될 수 있어야 한다 — ‘이름’ 칸을 성 + 이름으로
+    /// 다시 채우는 것처럼. (그래서 이 창이 빈 채로 뜨는 일은 없다.)
+    private func fillTargets(_ picked: [UnifiedColumn],
+                             holes: [UnifiedColumn: Int]) -> [UnifiedColumn] {
+        let withHoles = picked
+            .filter { templateColumns.contains($0) && (holes[$0] ?? 0) > 0 }
+            .sorted { (holes[$0] ?? 0) > (holes[$1] ?? 0) }
+        if !withHoles.isEmpty { return withHoles }
+        let inTemplate = picked.filter { templateColumns.contains($0) }
+        return inTemplate.isEmpty ? picked : inTemplate
     }
 
     /// 이 칸에 넣을 만한 후보 — 함께 고른 틀 밖 컬럼을 맨 앞에 세운다.
@@ -8007,6 +8020,12 @@ enum ColumnWorkStatus {
 
 }
 
+/// 표가 가로로 얼마나 밀렸는지 알려 주는 전달 키.
+struct TableOffsetKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
 /// Shared state for the standalone preview window. ContentView writes into it
 /// on every cleaning action; the window observes and re-renders live.
 final class PreviewModel: ObservableObject {
@@ -8430,6 +8449,10 @@ struct PreviewWindowView: View {
     /// 컬럼 폭 — 머리글 오른쪽 끝을 잡고 끌어서 바꾼다.
     @State private var columnWidths: [String: CGFloat] = [:]
     @State private var widthDrag: (column: String, start: CGFloat)?
+    /// 표가 가로로 얼마나 밀렸는지, 그리고 창이 얼마나 넓은지.
+    /// 이 둘로 ‘지금 그릴 컬럼 구간’을 **한 번만** 정해 모든 줄이 똑같이 쓴다.
+    @State private var hOffset: CGFloat = 0
+    @State private var viewportWidth: CGFloat = 900
     private static let defaultColumnWidth: CGFloat = 190
 
     private func width(_ c: UnifiedColumn) -> CGFloat {
@@ -9034,24 +9057,68 @@ struct PreviewWindowView: View {
 
     /// 표 본체 — 조각으로 나눠 둔다 (한 덩어리면 타입 체크가 버겁다).
     private var previewTableView: some View {
-        ScrollViewReader { proxy in
-            ScrollView([.horizontal, .vertical]) {
-                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                    Section {
-                        ForEach(visibleRows, id: \.1.id) { i, row in
-                            tableRow(i, row)
+        GeometryReader { outer in
+            ScrollViewReader { proxy in
+                ScrollView([.horizontal, .vertical]) {
+                    LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                        Section {
+                            ForEach(visibleRows, id: \.1.id) { i, row in
+                                tableRow(i, row)
+                            }
+                        } header: {
+                            tableHeader
                         }
-                    } header: {
-                        tableHeader
+                    }
+                    // 가로로 얼마나 밀렸는지 — 모든 줄이 **같은 컬럼 구간**을 그리게 하려면
+                    // 이 값이 필요하다 (줄마다 제 나름대로 재면 줄이 어긋난다).
+                    .background(GeometryReader { g in
+                        Color.clear.preference(
+                            key: TableOffsetKey.self,
+                            value: -g.frame(in: .named("previewTable")).minX)
+                    })
+                }
+                .coordinateSpace(name: "previewTable")
+                .onPreferenceChange(TableOffsetKey.self) { value in
+                    // 반 컬럼쯤 움직였을 때만 구간을 다시 잡는다 (매 픽셀 갱신은 낭비).
+                    if abs(value - hOffset) > 40 { hOffset = value }
+                }
+                .onChange(of: jumpColumn) { name in
+                    guard let name else { return }
+                    DispatchQueue.main.async {
+                        withAnimation { proxy.scrollTo("col:" + name, anchor: .center) }
+                        jumpColumn = nil
                     }
                 }
-            }
-            .onChange(of: jumpColumn) { name in
-                guard let name else { return }
-                withAnimation { proxy.scrollTo("col:" + name, anchor: .center) }
-                jumpColumn = nil
+                .onAppear { viewportWidth = outer.size.width }
+                .onChange(of: outer.size.width) { viewportWidth = $0 }
             }
         }
+    }
+
+    /// 지금 화면에 걸치는 컬럼 구간. 양옆으로 두 칸씩 더 그려 스크롤이 끊겨 보이지 않게 한다.
+    /// **모든 줄과 머리글이 이 구간 하나만 그린다** — 줄마다 다른 구간을 그리면 어긋난다.
+    private var columnWindow: (range: Range<Int>, leading: CGFloat) {
+        let cols = shownColumns
+        guard !cols.isEmpty else { return (0..<0, 0) }
+        var starts: [CGFloat] = []
+        var x: CGFloat = 0
+        for c in cols { starts.append(x); x += width(c) + 16 }
+
+        let from = max(0, hOffset - gutterWidth)
+        let to = from + max(viewportWidth, 400)
+        var first = 0
+        while first < cols.count - 1 && starts[first] + width(cols[first]) + 16 < from { first += 1 }
+        var last = first
+        while last < cols.count - 1 && starts[last] < to { last += 1 }
+
+        first = max(0, first - 2)
+        last = min(cols.count - 1, last + 2)
+        // 눌러서 데려갈 컬럼은 반드시 그려 둬야 그쪽으로 스크롤할 수 있다.
+        if let jump = jumpColumn, let idx = cols.firstIndex(where: { $0.rawValue == jump }) {
+            first = min(first, idx)
+            last = max(last, idx)
+        }
+        return (first..<(last + 1), starts[first])
     }
 
     /// 줄 머리(확정·행 번호·출처)의 너비 — 머리글과 본문이 같은 값을 써야 칸이 맞는다.
@@ -9067,12 +9134,17 @@ struct PreviewWindowView: View {
     private func tableRow(_ i: Int, _ row: ApplicantRow) -> some View {
         let confirmed: Color = model.isConfirmed(i) ? Color.green.opacity(0.10) : Color.clear
         let file: Color = showColors ? (model.fileTint(row: i)?.opacity(0.14) ?? .clear) : .clear
+        let window = columnWindow
+        let cols = shownColumns
         return VStack(spacing: 0) {
-            LazyHStack(spacing: 0) {
+            HStack(spacing: 0) {
                 rowHeadCell(i)
-                ForEach(shownColumns, id: \.self) { c in
-                    bodyCell(c, row: row, at: i)
+                // 왼쪽에 안 그린 컬럼들의 자리는 **정확한 너비의 빈칸**으로 메운다.
+                Color.clear.frame(width: window.leading, height: 1)
+                ForEach(window.range, id: \.self) { idx in
+                    bodyCell(cols[idx], row: row, at: i)
                 }
+                Spacer(minLength: 0)
             }
             .frame(width: tableWidth, height: 26, alignment: .leading)
             .background(confirmed)
@@ -9083,14 +9155,18 @@ struct PreviewWindowView: View {
 
     private var tableHeader: some View {
         let title: String = model.rowFiles.isEmpty ? "확정 · 행" : "확정 · 행 · 어느 파일에서"
-        return LazyHStack(spacing: 0) {
+        let window = columnWindow
+        let cols = shownColumns
+        return HStack(spacing: 0) {
             Text(title)
                 .font(.body.weight(.semibold)).foregroundStyle(.secondary)
                 .frame(width: gutterWidth - 16, alignment: .leading)
                 .padding(.horizontal, 8).padding(.vertical, 6)
-            ForEach(shownColumns, id: \.self) { c in
-                headerCell(c).id("col:" + c.rawValue)
+            Color.clear.frame(width: window.leading, height: 1)
+            ForEach(window.range, id: \.self) { idx in
+                headerCell(cols[idx]).id("col:" + cols[idx].rawValue)
             }
+            Spacer(minLength: 0)
         }
         .frame(width: tableWidth, height: 48, alignment: .leading)
         // 머리글은 스크롤 위에 떠 있다 — 불투명한 바닥을 먼저 깔아야 아래 행이 비쳐 보이지 않는다.
@@ -9112,14 +9188,17 @@ struct PreviewWindowView: View {
                 .help("고른 두 컬럼을 한 칸으로 합칩니다. 앞에 있는 컬럼 이름이 남아요.")
             }
             // 버튼 이름은 **지금 누르면 실제로 일어날 일**로 — ‘정리’ 같은 말은 무슨 뜻인지 모른다.
-            let willFill = model.usingTemplate
-                && model.selection.contains { (model.holeCounts[$0] ?? 0) > 0 }
+            let willFill = model.selection.count >= 2
+                || model.selection.contains { (model.holeCounts[$0] ?? 0) > 0 }
             Button { requestClean() } label: {
-                Text(willFill ? "이 칸들 채우기…" : "값 형식 맞추기…")
+                Text(willFill ? (model.selection.count >= 2 ? "이 칸들 합쳐 채우기…"
+                                                            : "이 칸 채우기…")
+                              : "값 형식 맞추기…")
             }
             .buttonStyle(.borderedProminent)
             .help(willFill
-                  ? "고른 것 중 틀 안의 빈 칸부터 — 어느 컬럼에서 값을 가져올지 물어봅니다."
+                  ? "어느 칸에 어느 컬럼의 값을 넣을지 정합니다 — 이어 붙이기(성 + 이름)나 "
+                    + "값이 있는 것 하나만 중에 고를 수 있어요."
                   : "고른 컬럼에서 같은 뜻인데 다르게 적힌 값을 하나로 맞춥니다.")
             Button("선택 해제") { model.selection = [] }
                 .controlSize(.small)
@@ -9134,10 +9213,10 @@ struct PreviewWindowView: View {
     private func requestClean() {
         let cols = shownColumns.filter { model.selection.contains($0) }
         guard !cols.isEmpty else { return }
-        // 고른 것 중에 ‘틀 안인데 아직 빈 행이 있는 칸’이 있으면, 값 형식을 다듬기 전에
-        // **어디서 가져올지**부터 묻는다 — 이 도구의 목표가 그 칸을 채우는 것이므로.
+        // 여러 개를 골랐다면 십중팔구 ‘이 칸들을 한 칸으로 모으고 싶다’는 뜻이다.
+        // 하나만 골랐을 땐 빈 행이 남은 칸이면 채우기, 아니면 값 형식 맞추기.
         let needsFilling = cols.contains { (model.holeCounts[$0] ?? 0) > 0 }
-        model.request = (model.usingTemplate && needsFilling) ? .fillFrom(cols) : .clean(cols)
+        model.request = (cols.count >= 2 || needsFilling) ? .fillFrom(cols) : .clean(cols)
     }
 
     private func requestMerge() {
