@@ -167,6 +167,8 @@ struct ContentView: View {
     @State private var fillTarget: UnifiedColumn?
     /// 한 컬럼의 변경사항만 미리 보는 창.
     @State private var changePreviewColumn: UnifiedColumn?
+    /// 컬럼 하나를 정리하는 작업 창 — 도구 창을 닫으면 여기로 돌아온다.
+    @State private var cleanHubColumn: UnifiedColumn?
     /// 미리보기에서 여러 컬럼을 골라 ‘데이터 정리하기’를 누른 경우 — 그 선택 전체.
     @State private var fillFromSelection: [UnifiedColumn] = []
     /// 값을 통째로 다른 컬럼으로 옮길 컬럼.
@@ -237,7 +239,7 @@ struct ContentView: View {
         // 창은 **하나로 모아 둔다** — `.sheet`를 여러 개 겹쳐 달면
         // 뒤에 단 것이 조용히 안 뜬다 (‘눌러도 아무 반응이 없다’의 원인).
         .sheet(item: Binding(get: { activeSheet },
-                             set: { if $0 == nil { closeSheets() } })) { kind in
+                             set: { if $0 == nil { dismissTopSheet() } })) { kind in
             sheetContent(kind)
         }
         // 이전 세션이 있으면 파일 화면에서 이어서 하기를 제안.
@@ -276,6 +278,7 @@ struct ContentView: View {
     private enum SheetKind: Int, Identifiable {
         case merge, filter, generate, fill, fillFrom, move, changes
         case filePreview, detail, config, example, regex, mapping, match
+        case cleanHub
         var id: Int { rawValue }
     }
 
@@ -294,15 +297,31 @@ struct ContentView: View {
         if regexColumn != nil { return .regex }
         if mappingColumn != nil { return .mapping }
         if showMatchSheet { return .match }
+        if cleanHubColumn != nil { return .cleanHub }
         return nil
     }
 
-    private func closeSheets() {
-        confirmMerge = nil; showFilterSheet = false; generateColumn = nil
-        fillTarget = nil; fillFromSelection = []; moveSource = nil
-        changePreviewColumn = nil; filePreview = nil; detailColumn = nil
-        configColumn = nil; exampleColumn = nil; regexColumn = nil
-        mappingColumn = nil; showMatchSheet = false
+    /// 지금 떠 있는 창 **하나만** 닫는다. 정리 작업 창 위에서 도구 창을 열었을 때,
+    /// 도구를 닫으면 작업 창으로 되돌아와 이어서 할 수 있게 하기 위해서다.
+    private func dismissTopSheet() {
+        switch activeSheet {
+        case .merge:       confirmMerge = nil
+        case .filter:      showFilterSheet = false
+        case .generate:    generateColumn = nil
+        case .fill:        fillTarget = nil
+        case .fillFrom:    fillFromSelection = []
+        case .move:        moveSource = nil
+        case .changes:     changePreviewColumn = nil
+        case .filePreview: filePreview = nil
+        case .detail:      detailColumn = nil
+        case .config:      configColumn = nil
+        case .example:     exampleColumn = nil
+        case .regex:       regexColumn = nil
+        case .mapping:     mappingColumn = nil
+        case .match:       showMatchSheet = false
+        case .cleanHub:    cleanHubColumn = nil
+        case .none:        break
+        }
     }
 
     @ViewBuilder
@@ -354,6 +373,8 @@ struct ContentView: View {
                                                    set: { allowedValues[col] = $0 }),
                                   onClose: { mappingColumn = nil })
             }
+        case .cleanHub:
+            if let col = cleanHubColumn { cleanHubSheet(col) }
         case .match:
             ColumnMatchSheet(baseName: base?.name ?? "",
                              suggestions: matchSuggestions,
@@ -1576,8 +1597,7 @@ struct ContentView: View {
                 },
                 onClean: {
                     moveSource = nil
-                    focusColumns = [source]
-                    withBusy("검토 화면을 만드는 중…") { startWork() }
+                    cleanHubColumn = source          // 이어서 정리 작업 창으로
                 },
                 onMerge: {
                     moveSource = nil
@@ -4328,6 +4348,21 @@ struct ContentView: View {
         preview.changes.filter { $0.column == col }
     }
 
+    /// 컬럼 하나를 정리하는 작업 창 — 여기서 도구를 골라 이어서 손본다.
+    private func cleanHubSheet(_ col: UnifiedColumn) -> some View {
+        let values = ValueScanner.distinct(col, in: plans)
+        return CleanColumnHubSheet(
+            column: col,
+            values: values,
+            mapping: valueMap[col] ?? [:],
+            openCount: reviewFor(col).map { openCount($0) } ?? 0,
+            onMappingTable: { mappingColumn = col },
+            onExample: { exampleColumn = col },
+            onRegex: { regexColumn = col },
+            onChanges: { changePreviewColumn = col },
+            onClose: { cleanHubColumn = nil })
+    }
+
     /// 한 컬럼의 변경 내역만 떼어 보여 주는 창.
     @ViewBuilder
     private var changePreviewSheet: some View {
@@ -5397,10 +5432,15 @@ struct ContentView: View {
         case .clean(let cols):
             let valid = cols.filter { finalColumns.contains($0) }
             guard !valid.isEmpty else { return }
-            focusColumns = Set(valid)
             preview.selection = []
             bringMainWindowToFront()
-            withBusy("검토 화면을 만드는 중…") { startWork() }
+            // 컬럼 하나면 **그 자리에서 이어서** 정리한다 (다른 화면으로 튕기지 않게).
+            if valid.count == 1 {
+                cleanHubColumn = valid[0]
+            } else {
+                focusColumns = Set(valid)
+                withBusy("검토 화면을 만드는 중…") { startWork() }
+            }
         case .merge(let a, let b):
             preview.selection = []
             bringMainWindowToFront()

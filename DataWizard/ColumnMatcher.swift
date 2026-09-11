@@ -1337,3 +1337,125 @@ struct ColumnActionSheet: View {
                                           : Color.primary.opacity(0.06)))
     }
 }
+
+/// 컬럼 하나를 정리하는 **작업 창**. 컬럼을 누르고 ‘값 정리하기’를 고르면 여기로 이어진다.
+/// 다른 창으로 튕겨 보내지 않고, 이 창 안에서 도구를 골라 계속 손보게 한다.
+struct CleanColumnHubSheet: View {
+    let column: UnifiedColumn
+    let values: [DistinctValue]
+    /// 원본 → 바뀔 값 (지금까지 정한 것).
+    let mapping: [String: String]
+    /// 아직 사람이 정하지 않은 값 수.
+    let openCount: Int
+    let onMappingTable: () -> Void
+    let onExample: () -> Void
+    let onRegex: () -> Void
+    let onChanges: () -> Void
+    let onClose: () -> Void
+
+    @State private var query = ""
+
+    private func after(_ v: String) -> String { mapping[v] ?? v }
+    private var changed: Int { values.filter { after($0.value) != $0.value }.count }
+    private var shown: [DistinctValue] {
+        query.isEmpty ? values
+            : values.filter { $0.value.localizedCaseInsensitiveContains(query)
+                              || after($0.value).localizedCaseInsensitiveContains(query) }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("‘\(column.rawValue)’ 값 정리").font(.title2.weight(.bold))
+                Text("값 \(values.count)종"
+                     + (changed > 0 ? " · 바뀌는 값 \(changed)종" : " · 아직 바꾼 값 없음")
+                     + (openCount > 0 ? " · 손볼 값 \(openCount)종" : ""))
+                    .font(.body).foregroundStyle(.secondary)
+            }
+            .padding(16)
+
+            Divider()
+
+            // 도구 — 어느 방법으로 손볼지 고른다. 고른 창을 닫으면 여기로 돌아온다.
+            HStack(spacing: 8) {
+                Button { onMappingTable() } label: {
+                    Label("여러 값을 하나로 모으기", systemImage: "tablecells")
+                }
+                .buttonStyle(.borderedProminent)
+                .help("‘원본 → 모을 값’ 표를 붙여넣어 한 번에 통일합니다.")
+                Button { onExample() } label: {
+                    Label("예시로 고치기", systemImage: "text.badge.checkmark")
+                }
+                .help("‘서울특별시 → 서울’처럼 두어 개만 적으면 같은 규칙이 걸리는 값을 찾아 줍니다.")
+                Button { onRegex() } label: {
+                    Label("패턴으로 정리하기", systemImage: "curlybraces")
+                }
+                .help("전화번호·날짜처럼 같은 규칙으로 여러 값을 한꺼번에 맞춥니다.")
+                Spacer(minLength: 8)
+                Button { onChanges() } label: {
+                    Label("변화 미리보기", systemImage: "arrow.left.arrow.right")
+                }
+                .disabled(changed == 0)
+            }
+            .padding(.horizontal, 16).padding(.vertical, 10)
+
+            Divider()
+
+            HStack(spacing: 10) {
+                TextField("값 검색…", text: $query)
+                    .textFieldStyle(.roundedBorder).frame(width: 220)
+                Text("지금 값 → 바뀔 값").font(.body.weight(.semibold)).foregroundStyle(.secondary)
+                Spacer()
+            }
+            .padding(.horizontal, 16).padding(.vertical, 8)
+
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(shown) { dv in
+                        let to = after(dv.value)
+                        let isChanged = to != dv.value
+                        HStack(spacing: 10) {
+                            Text(dv.value.isEmpty ? "(빈 값)" : dv.value)
+                                .font(.body)
+                                .lineLimit(1).truncationMode(.tail)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Image(systemName: isChanged ? "arrow.right" : "equal")
+                                .font(.body)
+                                .foregroundStyle(isChanged ? Color.accentColor
+                                                           : Color.secondary.opacity(0.4))
+                            Text(to.isEmpty ? "(빈 값)" : to)
+                                .font(.body.weight(isChanged ? .medium : .regular))
+                                .foregroundStyle(isChanged ? Color.accentColor : .secondary)
+                                .lineLimit(1).truncationMode(.tail)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Text("\(dv.count)")
+                                .font(.body.monospacedDigit()).foregroundStyle(.secondary)
+                                .frame(width: 54, alignment: .trailing)
+                        }
+                        .padding(.horizontal, 16).padding(.vertical, 5)
+                        .background(isChanged ? Color.accentColor.opacity(0.05) : .clear)
+                        Divider()
+                    }
+                    if shown.isEmpty {
+                        Text(values.isEmpty ? "이 컬럼엔 값이 없어요." : "찾는 값이 없어요.")
+                            .font(.body).foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity).padding(.vertical, 24)
+                    }
+                }
+            }
+
+            Divider()
+            HStack {
+                Text(changed > 0 ? "바뀐 값은 완성본에 바로 반영돼 있어요."
+                                 : "아직 바꾼 값이 없어요.")
+                    .font(.body).foregroundStyle(.secondary)
+                Spacer()
+                Button("끝내기") { onClose() }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+            }
+            .padding(16)
+        }
+        .frame(width: 760, height: 600)
+    }
+}
