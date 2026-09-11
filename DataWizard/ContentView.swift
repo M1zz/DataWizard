@@ -1690,20 +1690,6 @@ struct ContentView: View {
                     openPreviewWindow()
                 })]))
         }
-        let hiddenTotal = plans.reduce(0) { $0 + $1.hiddenRowsSkipped }
-        if hiddenTotal > 0 {
-            let names = plans.filter { $0.hiddenRowsSkipped > 0 }
-                .map { "\($0.fileName) \($0.hiddenRowsSkipped)행" }
-                .joined(separator: " · ")
-            out.append(MergeStep(
-                id: "hidden",
-                symbol: "eye.slash", tint: .accentColor,
-                title: "시트에서 숨겨 둔 행 \(hiddenTotal)개는 빼고 읽었어요",
-                detail: names + "\n엑셀·넘버스에서 감춰 둔 줄이라, 화면에서 보이던 대로 읽었습니다. "
-                    + "원본 전체가 필요하면 아래 버튼으로 다시 읽어 올 수 있어요.",
-                actionTitle: "숨긴 행도 포함해서 다시 읽기",
-                action: { reloadIncludingHiddenRows() }))
-        }
         let empties = emptyColumns
         if let first = empties.first {
             let hint = empties.compactMap { c -> String? in
@@ -1807,10 +1793,14 @@ struct ContentView: View {
             }
             if plans.contains(where: { $0.hiddenRowsSkipped > 0 }) {
                 HStack(spacing: 6) {
-                    Text("시트에서 숨겨져 있어 뺀 행").font(.body).foregroundStyle(.secondary)
+                    Text("시트에서 숨겨져 있던 행 (안 읽음)")
+                        .font(.body).foregroundStyle(.secondary)
                     Spacer(minLength: 8)
                     Text("\(plans.reduce(0) { $0 + $1.hiddenRowsSkipped })행")
                         .font(.body.monospacedDigit()).foregroundStyle(.secondary)
+                    Button("포함하기") { reloadIncludingHiddenRows() }
+                        .controlSize(.small)
+                        .help("엑셀·넘버스에서 감춰 둔 줄까지 다시 읽어 옵니다.")
                 }
             }
             Divider()
@@ -2428,6 +2418,12 @@ struct ContentView: View {
         }
     }
 
+    /// 예전 세션은 숨긴 행까지 읽어 둔 상태일 수 있다 — 그럴 땐 새로 여는 게 맞다.
+    private func resumeNeedsReload(_ s: SessionSnapshot) -> Bool {
+        (s.hiddenRowsAware ?? false) == false
+            && s.files.contains { $0.path.lowercased().hasSuffix(".xlsx") }
+    }
+
     /// 이전에 하던 작업을 이어서 할지 묻는 카드 (파일 화면 상단).
     private func resumeCard(_ s: SessionSnapshot) -> some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -2439,6 +2435,12 @@ struct ContentView: View {
                         .font(.headline)
                     Text("\(s.summary) · 저장 \(Self.savedAtText(s.savedAt))")
                         .font(.body).foregroundStyle(.secondary)
+                    if resumeNeedsReload(s) {
+                        Text("이 작업은 예전 규칙으로 읽혀서 **시트에서 숨긴 행까지** 들어 있을 수 있어요. "
+                             + "숨긴 행을 빼고 다시 읽으려면 ‘새로 시작’ 후 파일을 다시 올려 주세요.")
+                            .font(.body).foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 Spacer()
             }
@@ -5279,7 +5281,8 @@ struct ContentView: View {
             confirmedRows: Array(confirmedRowKeys),
             deletedRows: Array(deletedSourceIDs),
             filterColumn: filterColumn?.rawValue,
-            filterKeep: Array(filterKeep))
+            filterKeep: Array(filterKeep),
+            hiddenRowsAware: true)
     }
 
     /// 변경이 잦아도 0.8초 뒤 한 번만 저장 (디바운스).
