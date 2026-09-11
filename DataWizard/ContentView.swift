@@ -1510,7 +1510,9 @@ struct ContentView: View {
                     if !v.isEmpty, !samples.contains(v) { samples.append(v) }
                     if samples.count >= 2 { break }
                 }
-                guard !samples.isEmpty else { continue }
+                // 함께 고른 컬럼은 값 예시를 못 뽑아도 후보에서 빼지 않는다
+                // (골라 놨는데 목록에 없으면 왜 안 되는지 알 수가 없다).
+                guard !samples.isEmpty || prefer.contains(col) else { continue }
                 out.append(.init(column: col, fileName: plan.fileName,
                                  samples: samples, percent: recommended[col]))
             }

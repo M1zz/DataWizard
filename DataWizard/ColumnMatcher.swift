@@ -882,6 +882,12 @@ struct FillFromSheet: View {
     @State private var thenClean = false
     @State private var didSeed = false
 
+    /// 받을 칸을 뺀, 함께 고른 컬럼들 (= 넣을 재료).
+    private var materials: [UnifiedColumn] {
+        let targetSet = Set(targets)
+        return selectedOutside.filter { !targetSet.contains($0) }
+    }
+
     private func sources(_ t: UnifiedColumn) -> [UnifiedColumn] { pick[t] ?? [] }
     private func separator(_ t: UnifiedColumn) -> String { sep[t] ?? " " }
     private func mode(_ t: UnifiedColumn) -> CombineMode { how[t] ?? .join }
@@ -899,9 +905,11 @@ struct FillFromSheet: View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("틀 안의 칸을 어디서 채울까요?").font(.title2.weight(.bold))
-                Text("고른 것 중 \(targets.count)개를 값을 받을 칸으로 세웠어요. "
-                     + "칸마다 값을 가져올 컬럼을 고르면 그 값이 이 칸으로 옮겨집니다. "
-                     + "행 수는 그대로예요 — 값이 자리를 옮길 뿐입니다.")
+                Text("고른 것 중 \(targets.count)개를 값을 받을 칸으로 세웠어요"
+                     + (materials.isEmpty ? ""
+                        : " — 나머지 \(materials.count)개(\(materials.map(\.rawValue).joined(separator: " · ")))는 "
+                          + "여기에 넣을 재료입니다")
+                     + ". 행 수는 그대로예요 — 값이 자리를 옮길 뿐입니다.")
                     .font(.body).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 // ‘+’로 이어 붙인 문자열엔 마크다운이 먹지 않는다 — 강조 없이 또렷한 문장으로.
@@ -1109,15 +1117,23 @@ struct FillFromSheet: View {
         pick[t] = list
     }
 
-    /// 값 모양이 닮은 짝만 미리 골라 둔다. 한 컬럼을 여러 칸에 동시에 넣는 일은 없게
-    /// 이미 쓴 출처는 건너뛴다 — 확실하지 않은 건 사람이 고르게 둔다.
+    /// 받을 칸이 하나뿐이면, **함께 고른 나머지를 그대로 재료로 넣어 둔다.**
+    /// 세 개를 체크하고 ‘합쳐 채우기’를 누른 사람의 뜻이 그거니까 — 창을 열자마자
+    /// `① 국문 성 ② 국문 이름`과 `이렇게 들어갑니다 → 김 철수`가 보여야 한다.
+    /// 받을 칸이 여럿이면 값 모양이 닮은 짝만 하나씩 미리 골라 둔다.
     private func seed() {
-        let selected = Set(selectedOutside)
+        let targetSet = Set(targets)
+        let others = selectedOutside.filter { !targetSet.contains($0) }
+        if targets.count == 1, !others.isEmpty {
+            let list = candidates[targets[0]] ?? []
+            let usable = others.filter { c in list.contains { $0.column == c } }
+            if !usable.isEmpty { pick[targets[0]] = usable; return }
+        }
         var used = Set<UnifiedColumn>()
         for t in targets {
             let list = candidates[t] ?? []
             guard let best = list.first(where: {
-                selected.contains($0.column) && ($0.percent ?? 0) > 0 && !used.contains($0.column)
+                others.contains($0.column) && ($0.percent ?? 0) > 0 && !used.contains($0.column)
             }) else { continue }
             pick[t] = [best.column]
             used.insert(best.column)
