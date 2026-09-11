@@ -7960,10 +7960,11 @@ struct PreviewWindowView: View {
 
     /// 표의 셀 한 칸. 컬럼 상태가 배경으로 내려오고, 개선된 값은 파란 굵은 글씨,
     /// 지금 보는 열은 좌우 세로선으로 기둥처럼 이어진다.
+    /// 표의 셀 한 칸. 스크롤이 끊기지 않도록 **한 칸에 붙는 것을 최소로** 유지한다
+    /// (배경 한 겹 · 강조선은 그 열일 때만 · 툴팁 없음 — 값은 더블클릭으로 크게 본다).
     private func bodyCell(_ c: UnifiedColumn, row: ApplicantRow, at i: Int) -> some View {
         let improved = model.diff[i]?.contains(c) ?? false
         let focused = model.focused == c
-        let picked = model.selection.contains(c)
         let value = row[c]
         let fg: Color = improved ? .accentColor
             : (value.isEmpty ? Color.secondary.opacity(0.5) : .primary)
@@ -7974,20 +7975,20 @@ struct PreviewWindowView: View {
             .lineLimit(1).truncationMode(.tail)
             .frame(width: width(c), alignment: .leading)
             .padding(.horizontal, 8).padding(.vertical, 4)
-            .background(showColors ? model.cellTint(c, improved: improved) : .clear)
-            .background(picked ? Color.accentColor.opacity(0.07) : .clear)
-            .background(focused ? Color.accentColor.opacity(0.12) : .clear)
-            .overlay(alignment: .leading) { focusEdge(focused) }
+            .background(cellBackground(c, improved: improved, focused: focused))
             .overlay(alignment: .trailing) { focusEdge(focused) }
-            .help(improved
-                  ? "개선됨\n이전: \(i < model.baselineRows.count ? model.baselineRows[i][c] : "")\n이후: \(value)"
-                  : value)
             .contextMenu { cellMenu(c, value) }
-            // 더블클릭하면 바로 고치기 창 (오른쪽 클릭 메뉴와 같은 동작).
             .onTapGesture(count: 2) {
                 editText = value
                 editing = EditTarget(column: c, value: value)
             }
+    }
+
+    /// 셀 배경 한 겹으로 합치기 — 겹쳐 그리던 세 겹을 하나로.
+    private func cellBackground(_ c: UnifiedColumn, improved: Bool, focused: Bool) -> Color {
+        if focused { return .accentColor.opacity(0.12) }
+        if model.selection.contains(c) { return .accentColor.opacity(0.07) }
+        return showColors ? model.cellTint(c, improved: improved) : .clear
     }
 
     /// 셀에서 바로 할 수 있는 일 — 복사와 값 고치기.
@@ -8226,12 +8227,13 @@ struct PreviewWindowView: View {
         let confirmed: Color = model.isConfirmed(i) ? Color.green.opacity(0.10) : Color.clear
         let file: Color = showColors ? (model.fileTint(row: i)?.opacity(0.14) ?? .clear) : .clear
         return VStack(spacing: 0) {
-            HStack(spacing: 0) {
+            LazyHStack(spacing: 0) {
                 rowHeadCell(i)
                 ForEach(model.columns, id: \.self) { c in
                     bodyCell(c, row: row, at: i)
                 }
             }
+            .frame(height: 26)
             .background(confirmed)
             .background(file)
             Divider()
@@ -8241,7 +8243,7 @@ struct PreviewWindowView: View {
     private var tableHeader: some View {
         let gutter: CGFloat = model.rowFiles.isEmpty ? 82 : 215
         let title: String = model.rowFiles.isEmpty ? "확정 · 행" : "확정 · 행 · 어느 파일에서"
-        return HStack(spacing: 0) {
+        return LazyHStack(spacing: 0) {
             Text(title)
                 .font(.body.weight(.semibold)).foregroundStyle(.secondary)
                 .frame(width: gutter, alignment: .leading)
@@ -8250,6 +8252,7 @@ struct PreviewWindowView: View {
                 headerCell(c).id("col:" + c.rawValue)
             }
         }
+        .frame(height: 44)
         .background(Color(nsColor: .underPageBackgroundColor))
     }
 
@@ -8372,14 +8375,12 @@ struct PreviewWindowView: View {
             legendItem("checkmark.circle", .green, "남은 결정 없음")
             legendItem("minus.circle", .secondary, "손댈 값 없음")
             legendItem("rectangle.portrait.and.arrow.right", .accentColor, "검토 중인 열")
-            if !model.splitColumns.isEmpty {
-                legendItem("square.dashed", .orange, "아직 안 합쳐진 컬럼")
-            }
-            if model.fileNames.count > 1 {
+
+            if model.usingTemplate, !model.extraColumns.isEmpty {
                 HStack(spacing: 4) {
-                    Circle().fill(Color.secondary.opacity(0.35)).frame(width: 8, height: 8)
-                    Text("열 배경·점 = 그 컬럼이 들어 있는 파일")
-                        .font(.body).foregroundStyle(.secondary)
+                    RoundedRectangle(cornerRadius: 2).fill(Color.secondary.opacity(0.25))
+                        .frame(width: 10, height: 10)
+                    Text("틀 밖 컬럼").font(.body).foregroundStyle(.secondary)
                 }
             }
             HStack(spacing: 4) {
