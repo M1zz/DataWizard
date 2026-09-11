@@ -596,6 +596,8 @@ struct PreviewPayload {
     var duplicateRows: Set<Int> = []
     var duplicateOf: [Int: Int] = [:]
     var baseName = ""
+    /// 값 정리가 바꾼 셀들 (이전 → 이후) — 변경 내역 화면에 그대로 쓴다.
+    var changes: [ChangeRecord] = []
 }
 
 /// 값 통일 → 결과물 만들기 → 바뀐 셀 찾기. 전부 순수 계산이라 어느 스레드에서든 돌릴 수 있다.
@@ -606,9 +608,11 @@ enum PreviewBuilder {
         var applied: [ApplicantRow] = []
         var origins: [Int] = []
         var generatedCodes = Set<String>()
+        var changes: [ChangeRecord] = []
         if input.isUtility {
             let r = ValueApplier.run(plans: input.plans, valueMap: input.valueMap)
             applied = r.rows
+            changes = r.changes
             var o: [Int] = []
             for (i, p) in input.plans.enumerated() { o += Array(repeating: i, count: p.rows.count) }
             origins = o.count == applied.count ? o : []
@@ -619,16 +623,21 @@ enum PreviewBuilder {
             applied = r?.rows ?? []
             origins = r?.origins ?? []
             generatedCodes = r?.generatedCodes ?? []
+            changes = r?.changes ?? []
         }
 
         // 만들어 넣기로 한 값들 (빈 칸에만).
         ValueGenerator.apply(input.generated, to: &applied)
 
         guard let base = input.base else {
-            return plainPayload(input, rows: applied, origins: origins)
+            var p = plainPayload(input, rows: applied, origins: origins)
+            p.changes = changes
+            return p
         }
-        return patchPayload(input, base: base, rows: applied,
-                            origins: origins, generatedCodes: generatedCodes)
+        var p = patchPayload(input, base: base, rows: applied,
+                             origins: origins, generatedCodes: generatedCodes)
+        p.changes = changes
+        return p
     }
 
     /// 기준선 없이 ‘합쳐진 새 파일’을 보여 주는 경우.

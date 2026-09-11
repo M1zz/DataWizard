@@ -167,6 +167,8 @@ struct ContentView: View {
     /// 화면을 그릴 때마다 데이터를 다시 훑지 않도록 미리 계산해 둔 것들.
     /// (글자 하나 칠 때마다 632행 × 116컬럼을 몇 번씩 훑고 있었다.)
     struct WorkCache {
+        /// 컬럼별 값 예시 몇 개 — 칩·목록에서 바로 보여 주기 위해 미리 뽑아 둔다.
+        var samples: [UnifiedColumn: [String]] = [:]
         var keyCandidates: [UnifiedColumn] = []
         var identityColumns: [UnifiedColumn] = []
         var filterCandidates: [UnifiedColumn] = []
@@ -826,7 +828,12 @@ struct ContentView: View {
             }
             if !clean.isEmpty {
                 todoLine("wand.and.stars", "값을 정리할 컬럼 \(clean.count)개",
-                         clean.map { "\($0.column.rawValue) (\($0.note))" },
+                         clean.map { item in
+                             let ex = (cache.samples[item.column] ?? []).prefix(2)
+                                 .joined(separator: " · ")
+                             return "\(item.column.rawValue) (\(item.note))"
+                                 + (ex.isEmpty ? "" : " — \(ex)")
+                         },
                          "오타·형식이 어긋난 값이 남아 있어요.",
                          "‘\(clean[0].column.rawValue)’부터 정리 →") {
                     focusColumns = [clean[0].column]
@@ -1397,10 +1404,12 @@ struct ContentView: View {
                             .background(Capsule().fill(Color.orange.opacity(0.12)))
                     }
                 }
-                HStack(spacing: 6) {
-                    if plans.count > 1 { ownerDots(col) }
-                    Text(status.text)
-                        .font(.body).foregroundStyle(.secondary)
+                Text(status.text)
+                    .font(.body).foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.tail)
+                if let vals = cache.samples[col], !vals.isEmpty {
+                    Text(vals.joined(separator: " · "))
+                        .font(.body).foregroundStyle(.secondary.opacity(0.8))
                         .lineLimit(1).truncationMode(.tail)
                 }
             }
@@ -1582,27 +1591,20 @@ struct ContentView: View {
 
     private var previewCardHeader: some View {
         let sample = previewSampleRows()
-        let all = preview.columns.isEmpty ? finalColumns : preview.columns
-        let hidden = max(0, all.count - Self.inlinePreviewColumnLimit)
+        let cols = preview.columns.isEmpty ? finalColumns : preview.columns
         return HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text("완성본 미리보기").font(.headline)
-            Text("지금 상태로 만들어진 결과입니다 — 전체 \(preview.rows.count)행 중 \(sample.count)줄"
-                 + (hidden > 0 ? " · 앞 \(Self.inlinePreviewColumnLimit)컬럼" : ""))
+            Text("지금 상태 그대로 — 전체 \(preview.rows.count)행 중 \(sample.count)줄 · 컬럼 \(cols.count)개 (옆으로 밀어 보세요)")
                 .font(.body).foregroundStyle(.secondary)
             Spacer()
-            if hidden > 0 {
-                Button("나머지 \(hidden)컬럼 보기") { openPreviewWindow() }
-                    .controlSize(.small)
-            }
+            Button("큰 창에서 보기") { openPreviewWindow() }
+                .controlSize(.small)
         }
     }
 
-    /// 첫 화면 카드는 요약이라 앞쪽 컬럼만 그린다 — 113컬럼을 다 그리면 화면이 무거워진다.
-    private static let inlinePreviewColumnLimit = 12
-
     private var previewTable: some View {
-        let all: [UnifiedColumn] = preview.columns.isEmpty ? finalColumns : preview.columns
-        let cols: [UnifiedColumn] = Array(all.prefix(Self.inlinePreviewColumnLimit))
+        // 컬럼은 전부 보여 준다 (가로도 lazy라 보이는 것만 그려진다).
+        let cols: [UnifiedColumn] = preview.columns.isEmpty ? finalColumns : preview.columns
         let sample: [Int] = previewSampleRows()
         let border: Color = Color.primary.opacity(0.08)
         return ScrollView([.horizontal, .vertical]) {
@@ -1612,7 +1614,6 @@ struct ContentView: View {
                     previewBodyRow(cols, at: i)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(maxWidth: .infinity, maxHeight: 220, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -1627,13 +1628,14 @@ struct ContentView: View {
     }
 
     private func previewHeaderRow(_ cols: [UnifiedColumn]) -> some View {
-        HStack(spacing: 0) {
+        LazyHStack(spacing: 0) {
             Text("행 · 어느 파일에서")
                 .font(.body.weight(.semibold)).foregroundStyle(.secondary)
                 .frame(width: 150, alignment: .leading)
                 .padding(.horizontal, 8).padding(.vertical, 6)
             ForEach(cols) { col in previewHeaderCell(col) }
         }
+        .frame(height: 46)
         .background(Color.primary.opacity(0.04))
     }
 
@@ -1682,7 +1684,7 @@ struct ContentView: View {
         let row = preview.rows[i]
         let tint = preview.fileTint(row: i)
         let improved = preview.diff[i] ?? []
-        return HStack(spacing: 0) {
+        return LazyHStack(spacing: 0) {
             HStack(spacing: 4) {
                 RoundedRectangle(cornerRadius: 2)
                     .fill(tint ?? Color.secondary.opacity(0.35))
@@ -1704,6 +1706,7 @@ struct ContentView: View {
                 previewBodyCell(col, value: row[col], improved: improved.contains(col))
             }
         }
+        .frame(height: 28)
         .background(tint == nil ? Color.clear : tint!.opacity(0.10))
     }
 
@@ -5096,6 +5099,14 @@ struct ContentView: View {
         c.autoEditable = c.settled.filter { col in
             (valueMap[col] ?? [:]).contains { $0.key != $0.value }
         }
+        // 손볼 거리가 있는 칸은 값 예시를 함께 보여 준다 (뭘 고칠지 바로 알 수 있게).
+        var samples: [UnifiedColumn: [String]] = [:]
+        for col in c.todo.prefix(40) {
+            guard let r = reviewFor(col) else { continue }
+            let vals = r.values.isEmpty ? r.samples : r.values.map(\.value)
+            samples[col] = Array(vals.prefix(3))
+        }
+        c.samples = samples
         cache = c
     }
 
@@ -7749,6 +7760,8 @@ final class PreviewModel: ObservableObject {
     @Published var duplicateRows: Set<Int> = []
     /// 중복 행 → 앞서 나온 같은 사람의 행 번호.
     @Published var duplicateOf: [Int: Int] = [:]
+    /// 값 정리가 바꾼 셀들 (이전 → 이후).
+    @Published var changes: [ChangeRecord] = []
     /// 창을 열 때 중복만 보여 줄지.
     @Published var showDuplicatesOnly = false
     /// 지금 결과를 다시 만드는 중인가 (백그라운드).
@@ -7767,6 +7780,7 @@ final class PreviewModel: ObservableObject {
         duplicateRows = p.duplicateRows
         duplicateOf = p.duplicateOf
         baseName = p.baseName
+        changes = p.changes
         isBuilding = false
     }
 
@@ -8041,6 +8055,7 @@ struct PreviewWindowView: View {
     @State private var unconfirmedOnly = false
     /// 틀 밖 컬럼만 보기 — 어느 파일에서 온 값이 아직 안 옮겨졌는지 한눈에.
     @State private var extrasOnly = false
+    @State private var showChanges = false
     /// 눌러서 데려갈 컬럼 (표를 가로로 스크롤한다).
     @State private var jumpColumn: String?
     /// 값을 고치는 중인 셀 (컬럼 · 지금 값).
@@ -8196,6 +8211,12 @@ struct PreviewWindowView: View {
             .fixedSize()
             .help("앞줄에 같은 사람이 이미 있는 행만 봅니다. 지울지는 직접 정하세요.")
         }
+        if !model.changes.isEmpty {
+            Button { showChanges = true } label: {
+                Label("변경 내역 \(model.changes.count)", systemImage: "arrow.left.arrow.right")
+            }
+            .help("값 정리가 바꾼 칸을 이전 값 → 새 값으로 모아 봅니다.")
+        }
         Button { copyTable() } label: {
             Label("표 복사", systemImage: "doc.on.doc")
         }
@@ -8227,6 +8248,9 @@ struct PreviewWindowView: View {
         .frame(minWidth: 720, minHeight: 420)
         .background(NonRestorableWindow())
         .sheet(item: $editing) { editSheet($0) }
+        .sheet(isPresented: $showChanges) {
+            ChangeLogSheet(changes: model.changes, onClose: { showChanges = false })
+        }
         // 앱을 켤 때 저절로 뜨는(복원되는) 창은 닫는다 — 버튼으로 열었을 때만 남는다.
         // onAppear 시점엔 아직 창이 다 뜨지 않아 dismiss가 먹지 않을 수 있어 다음 차례로 미룬다.
         .onAppear {
@@ -8267,6 +8291,8 @@ struct PreviewWindowView: View {
 
     /// 셀 배경 한 겹으로 합치기 — 겹쳐 그리던 세 겹을 하나로.
     private func cellBackground(_ c: UnifiedColumn, improved: Bool, focused: Bool) -> Color {
+        // 값이 바뀐 칸이 가장 잘 보여야 한다 — 무엇이 손대졌는지가 제일 중요한 정보다.
+        if improved { return .accentColor.opacity(0.20) }
         if focused { return .accentColor.opacity(0.12) }
         if model.selection.contains(c) { return .accentColor.opacity(0.07) }
         return showColors ? model.cellTint(c, improved: improved) : .clear
@@ -8370,7 +8396,14 @@ struct PreviewWindowView: View {
                 RoundedRectangle(cornerRadius: 2)
                     .fill(tint ?? Color.secondary.opacity(0.35))
                     .frame(width: 3, height: 14)
-                if model.duplicateRows.contains(i) {
+                if let n = model.diff[i]?.count, n > 0 {
+                Text("수정 \(n)")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(Color.accentColor)
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .background(Capsule().fill(Color.accentColor.opacity(0.16)))
+            }
+            if model.duplicateRows.contains(i) {
                 let twin = model.duplicateOf[i]
                 Text(twin.map { "\($0 + 1)행과 중복" } ?? "중복")
                     .font(.body.weight(.semibold))

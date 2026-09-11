@@ -677,3 +677,136 @@ struct FillColumnSheet: View {
         .buttonStyle(.plain)
     }
 }
+
+// MARK: - 변경 내역 (이전 → 이후)
+
+/// 값 정리가 무엇을 어떻게 바꿨는지 모아 보는 창.
+/// 값 단위로 묶어서 ‘이 값이 저 값으로, 몇 행에서’를 한 줄로 읽게 한다.
+struct ChangeLogSheet: View {
+    let changes: [ChangeRecord]
+    let onClose: () -> Void
+
+    @State private var query = ""
+    @State private var column: UnifiedColumn?
+
+    /// 컬럼 · 이전 값 · 새 값이 같은 것끼리 묶는다.
+    struct Group: Identifiable {
+        let column: UnifiedColumn
+        let before: String
+        let after: String
+        var rows: [String]           // 어느 행이었는지 (Code·이메일·행 번호)
+        var files: Set<String>
+        var id: String { column.rawValue + "\u{1}" + before + "\u{1}" + after }
+    }
+
+    private var columns: [UnifiedColumn] {
+        var seen = Set<UnifiedColumn>()
+        return changes.compactMap { seen.insert($0.column).inserted ? $0.column : nil }
+    }
+
+    private var groups: [Group] {
+        var map: [String: Group] = [:]
+        var order: [String] = []
+        for c in changes {
+            if let col = column, c.column != col { continue }
+            if !query.isEmpty,
+               !c.before.localizedCaseInsensitiveContains(query),
+               !c.after.localizedCaseInsensitiveContains(query),
+               !c.column.rawValue.localizedCaseInsensitiveContains(query) { continue }
+            let key = c.column.rawValue + "\u{1}" + c.before + "\u{1}" + c.after
+            if map[key] == nil {
+                map[key] = Group(column: c.column, before: c.before, after: c.after,
+                                 rows: [], files: [])
+                order.append(key)
+            }
+            if map[key]!.rows.count < 50 { map[key]!.rows.append(c.ref) }
+            map[key]!.files.insert(c.file)
+        }
+        return order.compactMap { map[$0] }.sorted { $0.rows.count > $1.rows.count }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("변경 내역").font(.title2.weight(.bold))
+                    Text("값 정리가 바꾼 칸 \(changes.count)개 — 이전 값이 무엇이었는지 그대로 남습니다.")
+                        .font(.body).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Picker("컬럼", selection: $column) {
+                    Text("모든 컬럼").tag(UnifiedColumn?.none)
+                    ForEach(columns) { c in Text(c.rawValue).tag(UnifiedColumn?.some(c)) }
+                }
+                .frame(maxWidth: 220)
+                TextField("값 검색…", text: $query)
+                    .textFieldStyle(.roundedBorder).frame(width: 180)
+                Button("복사") { copyAll() }
+                Button("닫기") { onClose() }
+                    .keyboardShortcut(.cancelAction)
+            }
+            .padding(16)
+            Divider()
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 6) {
+                    ForEach(groups) { g in row(g) }
+                    if groups.isEmpty {
+                        Text("바뀐 값이 없습니다.")
+                            .font(.body).foregroundStyle(.secondary)
+                            .padding(20)
+                    }
+                }
+                .padding(16)
+            }
+        }
+        .frame(minWidth: 720, minHeight: 480)
+    }
+
+    private func row(_ g: Group) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Text(g.column.rawValue)
+                    .font(.body.weight(.semibold)).foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Text("\(g.rows.count)행")
+                    .font(.body.monospacedDigit()).foregroundStyle(.secondary)
+            }
+            HStack(spacing: 10) {
+                Text(g.before.isEmpty ? "(빈 칸)" : g.before)
+                    .font(.body)
+                    .foregroundStyle(g.before.isEmpty ? .secondary : .primary)
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(RoundedRectangle(cornerRadius: 6)
+                        .fill(Color.primary.opacity(0.06)))
+                Image(systemName: "arrow.right").foregroundStyle(.secondary)
+                Text(g.after.isEmpty ? "(빈 칸)" : g.after)
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(Color.accentColor)
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(RoundedRectangle(cornerRadius: 6)
+                        .fill(Color.accentColor.opacity(0.14)))
+                Spacer(minLength: 0)
+            }
+            Text(g.files.sorted().joined(separator: " · ")
+                 + " · " + g.rows.prefix(4).joined(separator: ", ")
+                 + (g.rows.count > 4 ? " 외" : ""))
+                .font(.body).foregroundStyle(.secondary)
+                .lineLimit(1).truncationMode(.tail)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 10)
+            .fill(Color(nsColor: .controlBackgroundColor)))
+    }
+
+    private func copyAll() {
+        var lines = ["컬럼\t이전 값\t새 값\t행 수\t파일"]
+        for g in groups {
+            lines.append([g.column.rawValue, g.before, g.after, "\(g.rows.count)",
+                          g.files.sorted().joined(separator: " ")].joined(separator: "\t"))
+        }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(lines.joined(separator: "\n"), forType: .string)
+    }
+}
