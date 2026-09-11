@@ -8732,6 +8732,25 @@ struct PreviewWindowView: View {
         columnWidths[c.rawValue] ?? Self.defaultColumnWidth
     }
 
+    /// 이 컬럼의 폭을 **값이 잘리지 않을 만큼** 넓힌다.
+    /// (표에서 `…`로 잘려 보이는 건 폭 때문이지 값이 잘린 게 아니다 — 복사·내보내기는
+    /// 늘 값 전체가 나간다. 그래도 눈으로 확인하려면 폭을 맞출 수 있어야 한다.)
+    private func fitWidth(_ c: UnifiedColumn) {
+        let attrs: [NSAttributedString.Key: Any] =
+            [.font: NSFont.systemFont(ofSize: NSFont.systemFontSize)]
+        var w = (c.rawValue as NSString).size(withAttributes: attrs).width + 64   // 체크박스·아이콘 자리
+        for (_, row) in visibleRows.prefix(300) {
+            let value = row[c]
+            guard !value.isEmpty else { continue }
+            w = max(w, (value as NSString).size(withAttributes: attrs).width + 24)
+        }
+        columnWidths[c.rawValue] = min(560, max(90, ceil(w)))
+    }
+
+    private func fitAllWidths() {
+        for c in shownColumns { fitWidth(c) }
+    }
+
     /// 표에 그릴 컬럼. 파일이 여럿이면 컬럼이 합집합이라 금세 난잡해지니
     /// ‘채울 칸만’(틀 안 빈 행) · ‘틀 밖만’(재료)으로 좁혀 볼 수 있다.
     private var shownColumns: [UnifiedColumn] {
@@ -8911,6 +8930,9 @@ struct PreviewWindowView: View {
                        isOn: Binding(get: { model.showDuplicatesOnly },
                                      set: { model.showDuplicatesOnly = $0 }))
             }
+            Divider()
+            Button("모든 컬럼 폭을 값에 맞추기") { fitAllWidths() }
+            Button("모든 컬럼 폭 기본으로") { columnWidths = [:] }
             if filtersOn {
                 Divider()
                 Button("보기 조건 모두 끄기") {
@@ -9087,6 +9109,7 @@ struct PreviewWindowView: View {
         Divider()
         Button("이 값 복사") { copyToClipboard(value) }
             .disabled(value.isEmpty)
+        Button("이 컬럼 폭을 값에 맞추기") { fitWidth(c) }
         Button("‘\(c.rawValue)’ 열 전체 복사") {
             copyToClipboard(([c.rawValue] + model.rows.map { $0[c] }).joined(separator: "\n"),
                             asTable: true)
@@ -9360,6 +9383,8 @@ struct PreviewWindowView: View {
             Button("값 정리하기 (오타·형식)…") { model.request = .clean([c]) }
             Button("‘\(c.rawValue)’ 값을 다른 컬럼으로 옮기기…") { model.request = .move(c) }
             Divider()
+            Button("이 컬럼 폭을 값에 맞추기") { fitWidth(c) }
+            Button("모든 컬럼 폭을 값에 맞추기") { fitAllWidths() }
             Button("이 컬럼 폭 기본으로") { columnWidths[c.rawValue] = nil }
             Button("모든 컬럼 폭 기본으로") { columnWidths = [:] }
         }
@@ -9593,7 +9618,8 @@ struct PreviewWindowView: View {
                     }
                     .onEnded { _ in widthDrag = nil }
             )
-            .help("끌어서 폭 바꾸기 — 오른쪽 클릭하면 기본으로 되돌립니다.")
+            .onTapGesture(count: 2) { fitWidth(c) }
+            .help("끌어서 폭 바꾸기 · 두 번 누르면 값에 맞춰 넓힙니다.")
     }
 
     /// 머리글 배경 — 상태색이 먼저, 그다음 ‘어느 파일에서 온 열인지’ 색.
