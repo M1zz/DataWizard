@@ -8877,7 +8877,7 @@ struct PreviewWindowView: View {
                     copyTable(columns: picked, withOrigin: false)
                 }
                 Button("고른 컬럼 이름만 복사") {
-                    copyToClipboard(picked.map(\.rawValue).joined(separator: "\t"))
+                    copyToClipboard(picked.map(\.rawValue).joined(separator: "\t"), asTable: true)
                 }
                 Divider()
             }
@@ -9026,7 +9026,8 @@ struct PreviewWindowView: View {
         Button("이 값 복사") { copyToClipboard(value) }
             .disabled(value.isEmpty)
         Button("‘\(c.rawValue)’ 열 전체 복사") {
-            copyToClipboard(model.rows.map { $0[c] }.joined(separator: "\n"))
+            copyToClipboard(([c.rawValue] + model.rows.map { $0[c] }).joined(separator: "\n"),
+                            asTable: true)
         }
         Button("표 전체 복사 (붙여넣기용)") {
             copyTable(columns: shownColumns, withOrigin: true)
@@ -9036,9 +9037,20 @@ struct PreviewWindowView: View {
         Button("‘\(c.rawValue)’ 값을 다른 컬럼으로 옮기기…") { model.request = .move(c) }
     }
 
-    private func copyToClipboard(_ text: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
+    /// 클립보드에 넣는다.
+    /// `asTable`이면 **탭 구분 표(TSV)라는 꼬리표**를 같이 붙인다 — 그냥 글자로만 넣으면
+    /// 엑셀이 예전에 쓰던 ‘텍스트 나누기’ 설정(예: 공백으로 나누기)을 그대로 적용해서
+    /// `South Korea`가 두 칸으로 쪼개지곤 한다.
+    private func copyToClipboard(_ text: String, asTable: Bool = false) {
+        let board = NSPasteboard.general
+        board.clearContents()
+        if asTable {
+            let tsv = NSPasteboard.PasteboardType("public.utf8-tab-separated-values-text")
+            board.declareTypes([tsv, .tabularText, .string], owner: nil)
+            board.setString(text, forType: tsv)
+            board.setString(text, forType: .tabularText)
+        }
+        board.setString(text, forType: .string)
     }
 
     /// 지금 보이는 표를 탭으로 구분해 복사 — 엑셀·시트에 그대로 붙습니다.
@@ -9058,7 +9070,7 @@ struct PreviewWindowView: View {
             let lead = withOrigin ? ["\(i + 1)", model.fileLabel(row: i)] : []
             lines.append((lead + cells).joined(separator: "\t"))
         }
-        copyToClipboard(lines.joined(separator: "\n"))
+        copyToClipboard(lines.joined(separator: "\n"), asTable: true)
     }
 
     /// 지금 보고 있는 표 그대로 파일로 저장한다 (골라 둔 컬럼이 있으면 그것만).
