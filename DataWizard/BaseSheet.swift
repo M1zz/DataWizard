@@ -579,6 +579,8 @@ struct PreviewInput {
     var visibleColumns: [UnifiedColumn]
     var keyColumn: UnifiedColumn?
     var needsBaseline: Bool
+    /// 빈 칸을 만들어 채우는 규칙 (틀의 빈 컬럼용).
+    var generated: [UnifiedColumn: GeneratedValue] = [:]
 }
 
 /// 만들어진 결과 — 메인 스레드에서 한 번에 반영한다.
@@ -618,6 +620,9 @@ enum PreviewBuilder {
             origins = r?.origins ?? []
             generatedCodes = r?.generatedCodes ?? []
         }
+
+        // 만들어 넣기로 한 값들 (빈 칸에만).
+        ValueGenerator.apply(input.generated, to: &applied)
 
         guard let base = input.base else {
             return plainPayload(input, rows: applied, origins: origins)
@@ -716,5 +721,70 @@ enum PreviewBuilder {
             if !v.isEmpty { return col.rawValue + "\u{1}" + v.lowercased() }
         }
         return "행 \(i + 1)"
+    }
+}
+
+// MARK: - 빈 칸을 값으로 채우기 (생성)
+
+/// 틀에는 있는데 파일에 값이 없는 칸을 **만들어서** 채우는 방법.
+enum GeneratedValue: Equatable {
+    /// 모든 행에 같은 값 (예: `POSTECH`, `2027`).
+    case fixed(String)
+    /// 행마다 1씩 올라가는 번호 (예: `6F10001`부터).
+    case serial(KeyPattern)
+
+    /// 저장·복원을 위한 한 줄 표기.
+    var encoded: String {
+        switch self {
+        case .fixed(let v):   return "fixed:" + v
+        case .serial(let p):  return "serial:" + p.value(0)
+        }
+    }
+
+    init?(encoded: String) {
+        if encoded.hasPrefix("fixed:") {
+            self = .fixed(String(encoded.dropFirst(6)))
+        } else if encoded.hasPrefix("serial:"),
+                  let p = KeyPattern(example: String(encoded.dropFirst(7))) {
+            self = .serial(p)
+        } else {
+            return nil
+        }
+    }
+
+    var describe: String {
+        switch self {
+        case .fixed(let v):  return "모든 행에 ‘\(v)’"
+        case .serial(let p): return "번호 매기기 — \(p.sample)"
+        }
+    }
+}
+
+extension ApplicantRow {
+    /// 비어 있는 칸에만 만들어 낸 값을 넣는다 (이미 값이 있으면 건드리지 않는다).
+    mutating func fillIfEmpty(_ col: UnifiedColumn, _ value: String) {
+        if self[col].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { self[col] = value }
+    }
+}
+
+enum ValueGenerator {
+    /// 정해 둔 규칙대로 빈 칸을 채운다. 행 수는 그대로다.
+    static func apply(_ rules: [UnifiedColumn: GeneratedValue], to rows: inout [ApplicantRow]) {
+        guard !rules.isEmpty else { return }
+        for (col, rule) in rules {
+            switch rule {
+            case .fixed(let v):
+                guard !v.isEmpty else { continue }
+                for i in rows.indices { rows[i].fillIfEmpty(col, v) }
+            case .serial(let pattern):
+                var n = 0
+                for i in rows.indices {
+                    if rows[i][col].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        rows[i][col] = pattern.value(n)
+                        n += 1
+                    }
+                }
+            }
+        }
     }
 }

@@ -45,6 +45,8 @@ struct SessionSnapshot: Codable {
     /// 행을 거르는 기준 컬럼과 남길 값들.
     var filterColumn: String?
     var filterKeep: [String]?
+    /// 틀의 빈 칸을 만들어 채우는 규칙 (컬럼 → `fixed:값` 또는 `serial:첫번호`).
+    var generatedColumns: [String: String]?
     /// 이 세션이 ‘시트에서 숨긴 행은 안 읽는’ 규칙으로 만들어졌는가.
     /// (이전 세션은 숨긴 행까지 들어 있을 수 있어 구분이 필요하다.)
     var hiddenRowsAware: Bool?

@@ -150,6 +150,15 @@ struct ContentView: View {
     @State private var filterColumn: UnifiedColumn?
     @State private var filterKeep: Set<String> = []
     @State private var showFilterSheet = false
+    /// 틀의 빈 칸을 만들어 채우는 규칙 (컬럼 → 고정값 또는 번호 매기기).
+    @State private var generatedColumns: [UnifiedColumn: GeneratedValue] = [:]
+    /// 지금 ‘빈 칸 채우기’에서 보고 있는 칸의 순서.
+    @State private var emptyIndex = 0
+    /// 값 만들기 창을 띄운 컬럼.
+    @State private var generateColumn: UnifiedColumn?
+    @State private var generateFixed = ""
+    @State private var generateSerial = "1"
+    @State private var generateIsSerial = false
     /// 미리보기 계산 순번 — 늦게 끝난 옛 계산이 새 결과를 덮지 않게.
     @State private var previewToken = 0
 
@@ -202,6 +211,8 @@ struct ContentView: View {
             mergeConfirmSheet
         }
         .sheet(isPresented: $showFilterSheet) { rowFilterSheet }
+        .sheet(isPresented: Binding(get: { generateColumn != nil },
+                                    set: { if !$0 { generateColumn = nil } })) { generateSheet }
         .sheet(item: $filePreview) { plan in
             FilePreviewSheet(plan: plan,
                              tint: fileTint(plans.firstIndex(where: { $0.id == plan.id }) ?? 0),
@@ -309,6 +320,7 @@ struct ContentView: View {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 10) {
                             workMergeCard
+                            templateFillCard
                             workPreviewCard
                             workProposalCard
                             workTodoSummary
@@ -1031,6 +1043,153 @@ struct ContentView: View {
         scheduleSave()
     }
 
+    // MARK: - 틀의 빈 칸 채우기
+
+    /// 틀에는 있는데 값이 하나도 없는 칸들 — 여기부터 채워야 완성본이 된다.
+    private var emptyTemplateColumns: [UnifiedColumn] {
+        guard !templateColumns.isEmpty else { return [] }
+        let empty = Set(cache.empty)
+        return templateColumns.filter { empty.contains($0) && generatedColumns[$0] == nil }
+    }
+
+    /// 틀에 없는 컬럼들 — 대개 이 값들이 틀 안의 칸으로 옮겨 가야 한다.
+    private var outsideTemplateColumns: [UnifiedColumn] {
+        guard !templateColumns.isEmpty else { return [] }
+        let inTemplate = Set(templateColumns)
+        return finalColumns.filter { !inTemplate.contains($0) }
+    }
+
+    /// 이 빈 칸에 넣을 만한 후보 (값 모양·이름으로 고른 것).
+    private func fillCandidates(for col: UnifiedColumn) -> [(column: UnifiedColumn, percent: Int)] {
+        matchSuggestions.compactMap { s in
+            guard let b = s.best, b.column == col else { return nil }
+            return (s.source, b.percent)
+        }
+    }
+
+    /// 틀의 빈 칸을 하나씩 채우는 카드 — 가져오기 / 합치기 / 만들기 / 비워 두기.
+    @ViewBuilder
+    private var templateFillCard: some View {
+        let empties = emptyTemplateColumns
+        if !empties.isEmpty {
+            let i = min(max(emptyIndex, 0), empties.count - 1)
+            let col = empties[i]
+            let candidates = fillCandidates(for: col)
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("틀의 빈 칸 채우기").font(.title3.weight(.bold))
+                    Text("\(empties.count)개 중 \(i + 1)번째")
+                        .font(.body).monospacedDigit().foregroundStyle(.secondary)
+                    Spacer()
+                    if outsideTemplateColumns.count > 0 {
+                        Text("틀 밖 컬럼 \(outsideTemplateColumns.count)개가 아직 남아 있어요")
+                            .font(.body).foregroundStyle(.orange)
+                    }
+                }
+                Text(col.rawValue)
+                    .font(.system(.title2, design: .rounded).weight(.bold))
+                    .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                if let first = candidates.first {
+                    Text("파일의 ‘\(first.column.rawValue)’가 이 칸 같아요 (\(first.percent)%)")
+                        .font(.body).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Text("이 칸에 넣을 값을 파일에서 못 찾았어요. 직접 고르거나, 합치거나, 만들어 넣으면 됩니다.")
+                        .font(.body).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                HStack(spacing: 10) {
+                    if let first = candidates.first {
+                        Button {
+                            withBusy("‘\(first.column.rawValue)’를 옮기는 중…") {
+                                applyColumnMerge(target: col, order: [first.column], separator: "")
+                            }
+                        } label: {
+                            Text("‘\(first.column.rawValue)’ 값 가져오기").fontWeight(.semibold)
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                    Button("다른 칸 고르기…") { configColumn = col }
+                    Button("여러 칸 합치기…") {
+                        var picked: [UnifiedColumn] = [col]
+                        picked += candidates.prefix(2).map(\.column)
+                        confirmMerge = picked.count >= 2 ? picked : [col] + outsideTemplateColumns.prefix(1)
+                    }
+                    Button("값 만들기…") {
+                        generateFixed = ""
+                        generateSerial = keyPatternText
+                        generateIsSerial = false
+                        generateColumn = col
+                    }
+                    Spacer()
+                    Button("비워 두기") {
+                        withAnimation { emptyIndex = (i + 1) % max(empties.count, 1) }
+                    }
+                }
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.orange.opacity(0.07)))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.orange.opacity(0.35), lineWidth: 1))
+        }
+    }
+
+    /// 빈 칸에 넣을 값을 만들어 주는 창 — 같은 값으로 채우거나, 번호를 매기거나.
+    @ViewBuilder
+    private var generateSheet: some View {
+        if let col = generateColumn {
+            let pattern = KeyPattern(example: generateSerial) ?? .auto
+            VStack(alignment: .leading, spacing: 12) {
+                Text("‘\(col.rawValue)’ 값 만들기").font(.title2.weight(.bold))
+                Picker("", selection: $generateIsSerial) {
+                    Text("모든 행에 같은 값").tag(false)
+                    Text("번호 매기기").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(maxWidth: 320)
+                if generateIsSerial {
+                    HStack(spacing: 8) {
+                        Text("첫 번호").font(.body.weight(.semibold))
+                        TextField("예: 6F10001", text: $generateSerial)
+                            .textFieldStyle(.roundedBorder).frame(width: 180)
+                        Text("→ \(pattern.sample)").font(.body).foregroundStyle(.secondary)
+                    }
+                } else {
+                    HStack(spacing: 8) {
+                        Text("넣을 값").font(.body.weight(.semibold))
+                        TextField("예: POSTECH", text: $generateFixed)
+                            .textFieldStyle(.roundedBorder).frame(width: 240)
+                    }
+                }
+                Text("비어 있는 칸에만 넣습니다 — 이미 값이 있는 행은 건드리지 않아요.")
+                    .font(.body).foregroundStyle(.secondary)
+                HStack {
+                    Spacer()
+                    Button("취소") { generateColumn = nil }
+                    Button("넣기") {
+                        let rule: GeneratedValue = generateIsSerial
+                            ? .serial(pattern) : .fixed(generateFixed)
+                        generateColumn = nil
+                        withBusy("값을 만들어 넣는 중…") {
+                            generatedColumns[col] = rule
+                            rebuildStatusCache()
+                            refreshPreview()
+                            scheduleSave()
+                        }
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!generateIsSerial && generateFixed.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+            .padding(20)
+            .frame(minWidth: 460)
+        }
+    }
+
     /// 컬럼을 눌러 고르는 판 — 하나 고르면 정리하러 가고, 여럿 고르면 함께 정리하거나 합친다.
     private var workColumnBoard: some View {
         let split = workColumnSplit
@@ -1051,11 +1210,40 @@ struct ContentView: View {
                 Button("해제") { focusColumns = [] }
             }
             if !picked.isEmpty { boardActionBar(picked) }
+            let outside = Set(outsideTemplateColumns)
+            if !outside.isEmpty {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.arrow.triangle.2.circlepath")
+                        .foregroundStyle(.orange)
+                    Text("틀 밖 컬럼 \(outside.count)개")
+                        .font(.body.weight(.semibold)).foregroundStyle(.orange)
+                    Text("이 값들은 틀 안의 칸으로 옮겨야 합니다 — 옮기지 않으면 결과 맨 뒤에 따로 붙어요.")
+                        .font(.body).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 8)
+                    Button("모두 고르기") { focusColumns = outside }
+                        .controlSize(.small)
+                    if !matchSuggestions.isEmpty {
+                        Button("짝지어 주기…") { showMatchSheet = true }
+                            .controlSize(.small)
+                    }
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.orange.opacity(0.08)))
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 230), spacing: 8)],
+                          alignment: .leading, spacing: 8) {
+                    ForEach(finalColumns.filter { outside.contains($0) }) { col in columnChip(col) }
+                }
+                Divider()
+                Text("틀 안 컬럼").font(.body.weight(.semibold)).foregroundStyle(.secondary)
+            }
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 230), spacing: 8)],
                       alignment: .leading, spacing: 8) {
-                ForEach(split.todo) { col in columnChip(col) }
+                ForEach(split.todo.filter { !outside.contains($0) }) { col in columnChip(col) }
                 if showAllColumns {
-                    ForEach(split.settled) { col in columnChip(col) }
+                    ForEach(split.settled.filter { !outside.contains($0) }) { col in columnChip(col) }
                 }
             }
             if !split.settled.isEmpty {
@@ -1133,6 +1321,7 @@ struct ContentView: View {
         let on = focusColumns.contains(col)
         let status = focusStatus(col)
         let empty = emptyColumns.contains(col)
+        let outside = !templateColumns.isEmpty && !templateColumns.contains(col)
         return Button {
             if on { focusColumns.remove(col) } else { focusColumns.insert(col) }
         } label: {
@@ -1144,7 +1333,13 @@ struct ContentView: View {
                         .font(.body.weight(.semibold))
                         .lineLimit(1).truncationMode(.tail)
                     Spacer(minLength: 0)
-                    if !status.badge.isEmpty {
+                    if outside {
+                        Text("틀 밖")
+                            .font(.body.weight(.bold))
+                            .foregroundStyle(.orange)
+                            .padding(.horizontal, 6).padding(.vertical, 1)
+                            .background(Capsule().fill(Color.orange.opacity(0.18)))
+                    } else if !status.badge.isEmpty {
                         Text(status.badge)
                             .font(.body.weight(.semibold))
                             .foregroundStyle(.orange)
@@ -1166,8 +1361,9 @@ struct ContentView: View {
                       : Color(nsColor: .controlBackgroundColor)))
             .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .strokeBorder(on ? Color.accentColor.opacity(0.5)
-                              : (empty ? Color.orange.opacity(0.35) : Color.primary.opacity(0.08)),
-                              style: StrokeStyle(lineWidth: on ? 1.5 : 1,
+                              : (outside ? Color.orange.opacity(0.55)
+                                 : (empty ? Color.orange.opacity(0.35) : Color.primary.opacity(0.08))),
+                              style: StrokeStyle(lineWidth: on || outside ? 1.5 : 1,
                                                  dash: empty && !on ? [4, 3] : [])))
             .contentShape(Rectangle())
         }
@@ -4975,7 +5171,8 @@ struct ContentView: View {
                                  visibleColumns: visibleFinalColumns.isEmpty ? finalColumns
                                                                             : visibleFinalColumns,
                                  keyColumn: keyColumn,
-                                 needsBaseline: preview.baselineRows.isEmpty)
+                                 needsBaseline: preview.baselineRows.isEmpty,
+                                 generated: generatedColumns)
 
         DispatchQueue.global(qos: .userInitiated).async {
             let payload = PreviewBuilder.build(input)
@@ -5143,7 +5340,10 @@ struct ContentView: View {
     /// (판단이 필요 없는 컬럼까지 사람이 일일이 고르게 하지 않는다).
     private var focusOrdered: [UnifiedColumn] {
         let auto = autoFillSettled ? Set(autoEditableColumns) : []
-        return allColumns.filter { focusColumns.contains($0) || auto.contains($0) }
+        let made = Set(generatedColumns.keys)
+        return allColumns.filter {
+            focusColumns.contains($0) || auto.contains($0) || made.contains($0)
+        }
     }
 
     private func toggleAll() {
@@ -5282,6 +5482,8 @@ struct ContentView: View {
             deletedRows: Array(deletedSourceIDs),
             filterColumn: filterColumn?.rawValue,
             filterKeep: Array(filterKeep),
+            generatedColumns: Dictionary(uniqueKeysWithValues:
+                generatedColumns.map { ($0.key.rawValue, $0.value.encoded) }),
             hiddenRowsAware: true)
     }
 
@@ -5381,6 +5583,11 @@ struct ContentView: View {
         deletedSourceIDs = Set(s.deletedRows ?? [])
         filterColumn = s.filterColumn.flatMap(col)
         filterKeep = Set(s.filterKeep ?? [])
+        generatedColumns = Dictionary(uniqueKeysWithValues:
+            (s.generatedColumns ?? [:]).compactMap { kv in
+                guard let c = col(kv.key), let v = GeneratedValue(encoded: kv.value) else { return nil }
+                return (c, v)
+            })
         indexBase()
         refreshMatches()
         patch = nil
@@ -5436,19 +5643,24 @@ struct ContentView: View {
         let map = valueMap
         let template = phoneTemplate
         let pattern = keyPattern
+        let generated = generatedColumns
         DispatchQueue.global(qos: .userInitiated).async {
             do {
                 let r: MergeResult
                 if utility {
                     // 유틸 모드: 올린 순서 그대로 이어 붙이고 값 통일만 적용한다.
                     let applied = ValueApplier.run(plans: allPlans, valueMap: map)
-                    r = MergeResult(rows: applied.rows, counts: [:], duplicatePairs: 0,
+                    var rows = applied.rows
+                    ValueGenerator.apply(generated, to: &rows)
+                    r = MergeResult(rows: rows, counts: [:], duplicatePairs: 0,
                                     keepCount: 0, removeCount: 0, unmatchedNoPhone: 0,
                                     changes: applied.changes)
                 } else {
-                    r = try MergeEngine(plans: allPlans, valueMap: map,
-                                        codePattern: pattern,
-                                        phoneTemplate: template).run()
+                    var merged = try MergeEngine(plans: allPlans, valueMap: map,
+                                                 codePattern: pattern,
+                                                 phoneTemplate: template).run()
+                    ValueGenerator.apply(generated, to: &merged.rows)
+                    r = merged
                 }
                 let p = baseSheet.map {
                     PatchEngine.apply(base: $0, merged: r.rows, generatedCodes: r.generatedCodes,
@@ -7585,8 +7797,8 @@ final class PreviewModel: ObservableObject {
         case .needsWork:            return .orange.opacity(improved ? 0.12 : 0.06)
         case .resolved, .nothingToDo:
             if improved { return .accentColor.opacity(0.10) }
-            // 틀 밖 컬럼만 옅은 회색으로 — 틀에 있던 칸과 구분되게.
-            if usingTemplate, extraColumns.contains(c) { return .secondary.opacity(0.05) }
+            // 틀 밖 컬럼은 옅은 주황으로 — 옮겨야 할 값이라는 뜻.
+            if usingTemplate, extraColumns.contains(c) { return .orange.opacity(0.07) }
             return .clear
         }
     }
@@ -8167,8 +8379,9 @@ struct PreviewWindowView: View {
                     .lineLimit(1).truncationMode(.tail)
                     .padding(.leading, 20)
             } else if extra {
-                Text("틀 밖 컬럼")
-                    .font(.body).foregroundStyle(.secondary)
+                Text("틀 밖 — 틀 안의 칸으로 옮기세요")
+                    .font(.body.weight(.semibold)).foregroundStyle(.orange)
+                    .lineLimit(1).truncationMode(.tail)
                     .padding(.leading, 20)
             }
         }
@@ -8322,9 +8535,10 @@ struct PreviewWindowView: View {
 
     /// 머리글 배경 — 상태색이 먼저, 그다음 ‘어느 파일에서 온 열인지’ 색.
     private func headerTint(_ c: UnifiedColumn, _ st: ColumnWorkStatus) -> Color {
+        // 틀 밖 컬럼이 가장 먼저 눈에 띄어야 한다 — 저 값들이 틀 안으로 옮겨 가야 하니까.
+        if model.usingTemplate, model.extraColumns.contains(c) { return .orange.opacity(0.18) }
         if st.needsWork { return .orange.opacity(0.14) }
         if model.checked.contains(c) { return .green.opacity(0.14) }
-        if model.usingTemplate, model.extraColumns.contains(c) { return .secondary.opacity(0.10) }
         return .clear
     }
 
@@ -8378,9 +8592,10 @@ struct PreviewWindowView: View {
 
             if model.usingTemplate, !model.extraColumns.isEmpty {
                 HStack(spacing: 4) {
-                    RoundedRectangle(cornerRadius: 2).fill(Color.secondary.opacity(0.25))
+                    RoundedRectangle(cornerRadius: 2).fill(Color.orange.opacity(0.35))
                         .frame(width: 10, height: 10)
-                    Text("틀 밖 컬럼").font(.body).foregroundStyle(.secondary)
+                    Text("틀 밖 컬럼 \(model.extraColumns.count)개 — 틀 안으로 옮기세요")
+                        .font(.body).foregroundStyle(.secondary)
                 }
             }
             HStack(spacing: 4) {
